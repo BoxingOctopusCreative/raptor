@@ -1,0 +1,5 @@
+Package: hello-raptor
+Version: 0.1.0
+Architecture: all
+Maintainer: Demo <demo@example.com>
+Description: Hello from Raptor

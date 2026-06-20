@@ -1,0 +1,22 @@
+[package]
+name = "raptor"
+description = "APT-compatible package manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "raptor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+raptor-core = { path = "../raptor-core" }
+serde_yaml.workspace = true
+walkdir.workspace = true
+
+[lib]
+name = "raptor"
+path = "src/lib.rs"

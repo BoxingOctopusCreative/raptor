@@ -1,0 +1,12 @@
+{
+  "packages": {
+    "hello-raptor": {
+      "name": "hello-raptor",
+      "version": "0.1.0",
+      "architecture": "all",
+      "status": "install ok installed",
+      "maintainer": "Demo <demo@example.com>",
+      "description": "Hello from Raptor"
+    }
+  }
+}

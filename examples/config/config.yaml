@@ -1,0 +1,24 @@
+paths:
+  root: /
+  state: /var/lib/raptor/state.yaml
+  cache: /var/cache/raptor
+  archives: /var/cache/apt/archives
+  config_dir: /etc/raptor
+  sources: /etc/apt/sources.list
+  sources_list_d: /etc/apt/sources.list.d
+  keyrings: /etc/apt/keyrings
+
+system:
+  suite: null
+  architecture: null
+  allow_insecure: false
+  debsig_verify: true
+
+unattended:
+  enabled: false
+  interval_hours: 24
+  auto_update: true
+  auto_upgrade: true
+  auto_reboot: false
+  packages: []
+  origins: []

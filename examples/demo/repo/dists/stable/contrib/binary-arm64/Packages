@@ -1,0 +1,9 @@
+Package: hello-raptor
+Version: 0.1.0
+Architecture: all
+Maintainer: Demo <demo@example.com>
+Filename: pool/h/hello-raptor_0.1.0_all.deb
+Size: 542
+MD5sum: b44de75a743a8ea80a45977b62418b39
+SHA256: f2d001907906ec8b6be16cb8c2d85c1d3aba14320efddb3e4bb92f2cac493793
+Description: Hello from Raptor

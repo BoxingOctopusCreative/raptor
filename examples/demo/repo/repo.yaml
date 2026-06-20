@@ -1,0 +1,18 @@
+kind: private
+suite: stable
+codename: stable
+components:
+- main
+architectures:
+- amd64
+- arm64
+- all
+signing:
+  key_id: null
+  keyring: keyrings/repo.gpg
+  email: repo@example.com
+ppa: null
+mirror: null
+publish:
+  origin: Raptor
+  label: Raptor Repository

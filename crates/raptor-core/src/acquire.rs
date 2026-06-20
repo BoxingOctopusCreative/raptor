@@ -1,0 +1,170 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use md5::{Digest as Md5Digest, Md5};
+use sha2::{Digest, Sha256};
+
+use crate::control::ControlFile;
+use crate::error::{Error, Result};
+use crate::remote::download_bytes;
+use crate::repository::PackageIndexEntry;
+use crate::trust::{insecure_acquire_allowed, verify_packages_trust};
+use crate::verify::verify_deb_package_signature;
+
+#[derive(Debug, Clone)]
+pub struct AcquireContext {
+    pub archives_dir: PathBuf,
+}
+
+/// Ensure a `.deb` is available locally, downloading from the configured repository if needed.
+pub fn ensure_deb(entry: &PackageIndexEntry, ctx: &AcquireContext) -> Result<PathBuf> {
+    if entry.file_path.exists() {
+        verify_control_checksums(&entry.file_path, &entry.control)?;
+        return Ok(entry.file_path.clone());
+    }
+
+    let source_uri = entry.source_uri.as_ref().ok_or_else(|| {
+        Error::PackageAcquire(format!(
+            "package {} is not available locally; run raptor repo update",
+            entry.control.package
+        ))
+    })?;
+
+    let filename = entry.control.filename.trim();
+    if filename.is_empty() {
+        return Err(Error::PackageAcquire(format!(
+            "package {} has no Filename in repository index",
+            entry.control.package
+        )));
+    }
+
+    let requires_trust = entry.signed_by.is_some() && !insecure_acquire_allowed();
+    if requires_trust {
+        verify_packages_trust(entry)?;
+    }
+
+    fs::create_dir_all(&ctx.archives_dir)?;
+    let dest = ctx.archives_dir.join(entry.control.full_name());
+    if dest.exists() {
+        match verify_control_checksums(&dest, &entry.control) {
+            Ok(()) => {
+                verify_deb_gpg_if_required(entry, source_uri, filename, &dest)?;
+                return Ok(dest);
+            }
+            Err(_) => {
+                let _ = fs::remove_file(&dest);
+            }
+        }
+    }
+
+    let url = build_package_url(source_uri, filename);
+    let temp = download_bytes(&url).map_err(|e| {
+        Error::PackageAcquire(format!(
+            "failed to download {}: {e}",
+            entry.control.package
+        ))
+    })?;
+
+    verify_control_checksums(&temp, &entry.control).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        e
+    })?;
+
+    verify_deb_gpg_if_required(entry, source_uri, filename, &temp)?;
+
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&temp, &dest)?;
+
+    Ok(dest)
+}
+
+fn verify_deb_gpg_if_required(
+    entry: &PackageIndexEntry,
+    source_uri: &str,
+    filename: &str,
+    deb_path: &Path,
+) -> Result<()> {
+    let Some(keyring_path) = entry.signed_by.as_deref() else {
+        return Ok(());
+    };
+
+    let keyring = Path::new(keyring_path);
+    let deb_url = build_package_url(source_uri, filename);
+    let sig_url = format!("{deb_url}.gpg");
+    let detached_sig = download_bytes(&sig_url).ok();
+    let result = verify_deb_package_signature(keyring, deb_path, detached_sig.as_deref());
+    if let Some(sig) = detached_sig {
+        let _ = fs::remove_file(sig);
+    }
+    result
+}
+
+/// Build the HTTP(S) URL for a pool package from repository base URI and `Filename` field.
+pub fn build_package_url(base_uri: &str, filename: &str) -> String {
+    let base = base_uri.trim_end_matches('/');
+    let file = filename.trim_start_matches('/');
+    format!("{base}/{file}")
+}
+
+pub fn verify_control_checksums(path: &Path, control: &ControlFile) -> Result<()> {
+    let bytes = fs::read(path)?;
+
+    if !control.size.is_empty() {
+        let expected: u64 = control.size.parse().map_err(|_| {
+            Error::ChecksumMismatch(format!("invalid Size field for {}", control.package))
+        })?;
+        if bytes.len() as u64 != expected {
+            return Err(Error::ChecksumMismatch(format!(
+                "size mismatch for {}: expected {}, got {}",
+                control.package,
+                expected,
+                bytes.len()
+            )));
+        }
+    }
+
+    if !control.sha256.is_empty() {
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != control.sha256.to_ascii_lowercase() {
+            return Err(Error::ChecksumMismatch(format!(
+                "SHA256 mismatch for {}",
+                control.package
+            )));
+        }
+        return Ok(());
+    }
+
+    if !control.md5sum.is_empty() {
+        let actual = format!("{:x}", Md5::digest(&bytes));
+        if actual != control.md5sum.to_ascii_lowercase() {
+            return Err(Error::ChecksumMismatch(format!(
+                "MD5 mismatch for {}",
+                control.package
+            )));
+        }
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_pool_download_url() {
+        let url = build_package_url(
+            "https://ppa.launchpadcontent.net/git-core/cargo/ubuntu",
+            "pool/main/c/cargo_1.0_amd64.deb",
+        );
+        assert_eq!(
+            url,
+            "https://ppa.launchpadcontent.net/git-core/cargo/ubuntu/pool/main/c/cargo_1.0_amd64.deb"
+        );
+    }
+}

@@ -1,0 +1,20 @@
+Origin: Raptor
+Label: Raptor Repository
+Suite: stable
+Codename: stable
+Date: Sat, 20 Jun 2026 20:58:56 +0000
+Architectures: amd64 arm64 all
+Components: main
+
+MD5Sum:
+ 243 152b00758b86babf41394b1e9a0b75b4 dists/stable/main/binary-amd64/Packages.gz
+SHA256:
+ 243 2fe8047d7933a114f162479f6bba56c17a90de1b825fc35ad629fbc39ae894b5 dists/stable/main/binary-amd64/Packages.gz
+MD5Sum:
+ 243 152b00758b86babf41394b1e9a0b75b4 dists/stable/main/binary-arm64/Packages.gz
+SHA256:
+ 243 2fe8047d7933a114f162479f6bba56c17a90de1b825fc35ad629fbc39ae894b5 dists/stable/main/binary-arm64/Packages.gz
+MD5Sum:
+ 243 152b00758b86babf41394b1e9a0b75b4 dists/stable/main/binary-all/Packages.gz
+SHA256:
+ 243 2fe8047d7933a114f162479f6bba56c17a90de1b825fc35ad629fbc39ae894b5 dists/stable/main/binary-all/Packages.gz

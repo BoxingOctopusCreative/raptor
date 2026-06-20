@@ -1,0 +1,13 @@
+[Unit]
+Description=Raptor unattended upgrades
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/raptor daemon
+Restart=on-failure
+RestartSec=300
+
+[Install]
+WantedBy=multi-user.target
