@@ -317,6 +317,50 @@ mod tests {
     }
 
     #[test]
+    fn save_preserves_conffiles_format_for_other_packages() {
+        let dir = std::env::temp_dir().join(format!("raptor-dpkg-conffiles-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("status");
+
+        fs::write(
+            &path,
+            "\
+Package: adduser
+Status: install ok installed
+Version: 3.137ubuntu1
+Architecture: all
+Conffiles:
+ /etc/adduser.conf deadbeef0123456789deadbeef0123456789
+Description: add and remove users
+
+Package: hello
+Status: install ok installed
+Version: 1.0
+Architecture: all
+Description: hi
+
+",
+        )
+        .unwrap();
+
+        let mut state = State::load(&path).unwrap();
+        state.install(&ControlFile {
+            package: "raptor".into(),
+            version: "0.6.3".into(),
+            architecture: "arm64".into(),
+            ..Default::default()
+        });
+        state.save().unwrap();
+
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("Conffiles:\n /etc/adduser.conf"));
+        assert!(!saved.contains("Conffiles: /etc/"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn deb_architecture_maps_rust_targets() {
         assert_eq!(deb_architecture("x86_64"), "amd64");
         assert_eq!(deb_architecture("aarch64"), "arm64");

@@ -130,6 +130,18 @@ fn format_stanza(fields: &BTreeMap<String, String>) -> String {
 }
 
 fn append_field(lines: &mut Vec<String>, key: &str, value: &str) {
+    // dpkg requires every Conffiles entry on a continuation line beginning with a space.
+    if key == "Conffiles" {
+        lines.push(format!("{key}:"));
+        for line in value.lines() {
+            let line = line.trim();
+            if !line.is_empty() {
+                lines.push(format!(" {line}"));
+            }
+        }
+        return;
+    }
+
     if !value.contains('\n') {
         lines.push(format!("{key}: {value}"));
         return;
@@ -170,6 +182,30 @@ mod tests {
         assert_eq!(
             parsed.get("Description").map(String::as_str),
             Some("line one\nline two")
+        );
+    }
+
+    #[test]
+    fn round_trips_conffiles_with_leading_space_lines() {
+        let content = "\
+Package: adduser
+Status: install ok installed
+Version: 3.137ubuntu1
+Architecture: all
+Conffiles:
+ /etc/adduser.conf deadbeef0123456789deadbeef0123456789
+ /etc/deluser.conf cafebabe0123456789cafebabe0123456789
+Description: add and remove users and groups
+";
+        let stanzas = parse_status_file(&format!("{content}\n")).unwrap();
+        let adduser = stanzas.get("adduser").unwrap();
+        let formatted = format_stanza(adduser);
+        assert!(formatted.contains("Conffiles:\n /etc/adduser.conf"));
+        assert!(!formatted.contains("Conffiles: /etc/"));
+        let reparsed = parse_stanza(&formatted).unwrap();
+        assert_eq!(
+            reparsed.get("Conffiles").map(String::as_str),
+            adduser.get("Conffiles").map(String::as_str)
         );
     }
 }
