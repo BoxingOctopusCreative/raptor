@@ -94,7 +94,20 @@ pub fn write_deb(path: &Path, archive: &DebArchive) -> Result<()> {
     Ok(())
 }
 
-pub fn extract_deb_to(path: &Path, deb_path: &Path) -> Result<()> {
+#[derive(Debug, Clone, Default)]
+pub struct ExtractDebResult {
+    /// Binaries that could not be overwritten while running; replaced after exit.
+    pub deferred_executables: Vec<DeferredExecutable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredExecutable {
+    pub dest: PathBuf,
+    pub staged: PathBuf,
+}
+
+pub fn extract_deb_to(path: &Path, deb_path: &Path) -> Result<ExtractDebResult> {
+    let mut result = ExtractDebResult::default();
     let file = File::open(deb_path)?;
     let mut archive = Archive::new(file);
     let mut data_bytes = Vec::new();
@@ -178,12 +191,105 @@ pub fn extract_deb_to(path: &Path, deb_path: &Path) -> Result<()> {
                 entry
                     .read_to_end(&mut content)
                     .map_err(|e| Error::InvalidDeb(e.to_string()))?;
-                fs::write(&dest, &content)?;
-                apply_mode(&dest, mode)?;
+                write_regular_file(
+                    &dest,
+                    &content,
+                    mode,
+                    &mut result.deferred_executables,
+                )?;
             }
         }
     }
+    Ok(result)
+}
+
+/// Replace executables staged during self-upgrade after the current process exits.
+pub fn apply_deferred_executables(deferred: &[DeferredExecutable]) -> Result<()> {
+    if deferred.is_empty() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::process::{Command, Stdio};
+
+        for item in deferred {
+            let pid = std::process::id();
+            let staged = item.staged.display().to_string();
+            let dest = item.dest.display().to_string();
+            let script = format!(
+                "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; mv -f '{staged}' '{dest}'"
+            );
+            Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(Error::Io)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = deferred;
+        Err(Error::InvalidDeb(
+            "cannot replace running executable on this platform".into(),
+        ))
+    }
+}
+
+fn write_regular_file(
+    dest: &Path,
+    content: &[u8],
+    mode: u32,
+    deferred: &mut Vec<DeferredExecutable>,
+) -> Result<()> {
+    if is_running_executable(dest) {
+        let staged = staged_executable_path(dest);
+        if staged.exists() {
+            fs::remove_file(&staged)?;
+        }
+        fs::write(&staged, content)?;
+        apply_mode(&staged, mode)?;
+        deferred.push(DeferredExecutable {
+            dest: dest.to_path_buf(),
+            staged,
+        });
+        return Ok(());
+    }
+    fs::write(dest, content)?;
+    apply_mode(dest, mode)?;
     Ok(())
+}
+
+fn staged_executable_path(dest: &Path) -> PathBuf {
+    dest.with_extension("new")
+}
+
+fn is_running_executable(dest: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+        let Ok(exe) = exe.canonicalize() else {
+            return false;
+        };
+        if dest.exists() {
+            if let Ok(dest) = dest.canonicalize() {
+                return exe == dest;
+            }
+        }
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dest;
+        false
+    }
 }
 
 /// Remove files installed from a `.deb`. When `purge` is false, conffiles are kept.
@@ -591,6 +697,14 @@ mod tests {
         let (control, _) = extract_control_tar(&tar_buf).unwrap();
         assert_eq!(control.package, "hello");
         assert_eq!(control.version, "1.0");
+    }
+
+    #[test]
+    fn staged_executable_path_appends_new_extension() {
+        assert_eq!(
+            staged_executable_path(Path::new("/usr/local/bin/raptor")),
+            PathBuf::from("/usr/local/bin/raptor.new")
+        );
     }
 
     #[test]

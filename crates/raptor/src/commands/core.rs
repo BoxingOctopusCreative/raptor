@@ -3,7 +3,7 @@ use raptor_core::acquire::{
     local_deb_index_entry, AcquireContext,
 };
 use raptor_core::control::ControlFile;
-use raptor_core::deb::{extract_deb_to, read_deb, remove_deb_from};
+use raptor_core::deb::{apply_deferred_executables, extract_deb_to, read_deb, remove_deb_from};
 use raptor_core::remote::fetch_remote_indexes;
 use raptor_core::repository::{scan_pool_directory, write_packages_index};
 use raptor_core::resolver::{ActionKind, Resolver};
@@ -203,6 +203,7 @@ fn execute_plan(
     plan: &raptor_core::resolver::InstallPlan,
     purge: bool,
 ) -> anyhow::Result<()> {
+    let mut deferred = Vec::new();
     for action in &plan.actions {
         match action.action {
             ActionKind::Install | ActionKind::Upgrade => {
@@ -227,7 +228,8 @@ fn execute_plan(
                     ));
                 }
                 let deb = read_deb(&deb_path)?;
-                extract_deb_to(&ctx.install_root, &deb_path)?;
+                let extract = extract_deb_to(&ctx.install_root, &deb_path)?;
+                deferred.extend(extract.deferred_executables);
                 ctx.state.install(&deb.control);
                 term::setting_up(&action.package, &action.version);
             }
@@ -247,6 +249,13 @@ fn execute_plan(
         }
     }
     ctx.save()?;
+    apply_deferred_executables(&deferred).map_err(|e| anyhow::anyhow!("{e}"))?;
+    for item in &deferred {
+        term::note_line(format!(
+            "Scheduled replacement of {}; the upgrade will take effect after this command exits.",
+            item.dest.display()
+        ));
+    }
     Ok(())
 }
 

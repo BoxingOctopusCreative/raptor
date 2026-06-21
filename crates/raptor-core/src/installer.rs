@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::acquire::{ensure_deb, AcquireContext};
-use crate::deb::{extract_deb_to, read_deb};
+use crate::deb::{apply_deferred_executables, extract_deb_to, read_deb};
 use crate::error::Result;
 use crate::repository::PackageIndex;
 use crate::resolver::{ActionKind, InstallPlan};
@@ -17,6 +17,7 @@ pub struct InstallContext {
 
 impl InstallContext {
     pub fn apply_plan(&mut self, plan: &InstallPlan) -> Result<()> {
+        let mut deferred = Vec::new();
         for action in &plan.actions {
             match action.action {
                 ActionKind::Install | ActionKind::Upgrade => {
@@ -34,7 +35,8 @@ impl InstallContext {
                     };
                     let deb_path = ensure_deb(entry, &acquire_ctx)?;
                     let deb = read_deb(&deb_path)?;
-                    extract_deb_to(&self.install_root, &deb_path)?;
+                    let extract = extract_deb_to(&self.install_root, &deb_path)?;
+                    deferred.extend(extract.deferred_executables);
                     self.state.install(&deb.control);
                 }
                 ActionKind::Remove => {
@@ -42,6 +44,8 @@ impl InstallContext {
                 }
             }
         }
-        self.state.save()
+        self.state.save()?;
+        apply_deferred_executables(&deferred)?;
+        Ok(())
     }
 }
