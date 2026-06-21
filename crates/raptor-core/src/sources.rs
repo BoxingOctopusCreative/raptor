@@ -292,11 +292,14 @@ fn parse_source_options(parts: Vec<&str>) -> Result<(Option<String>, Vec<&str>)>
     Ok((None, parts))
 }
 
-/// Merge `sources.list.d/*.list` entries not already present (e.g. after `raptor repo add`).
-fn merge_apt_list_d_extras(all: &mut SourcesList, list_d: &Path) -> Result<()> {
+/// Merge APT `sources.list` and `sources.list.d` entries not already present in `all`.
+///
+/// When `/etc/raptor/sources.d` YAML is incomplete (e.g. only `main`), Ubuntu `.sources`
+/// stanzas still supply `universe` and other components.
+fn merge_apt_source_extras(all: &mut SourcesList, main: &Path, list_d: &Path) -> Result<()> {
     use std::collections::HashSet;
 
-    if !list_d.is_dir() {
+    if !main.exists() && (!list_d.is_dir() || fs::read_dir(list_d)?.next().is_none()) {
         return Ok(());
     }
 
@@ -312,23 +315,30 @@ fn merge_apt_list_d_extras(all: &mut SourcesList, list_d: &Path) -> Result<()> {
         })
         .collect();
 
-    let mut list_paths: Vec<PathBuf> = fs::read_dir(list_d)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "list"))
-        .collect();
-    list_paths.sort();
+    let mut extras = SourcesList::default();
+    if main.exists() {
+        extras.entries.extend(SourcesList::load(main)?.entries);
+    }
+    if list_d.is_dir() {
+        let mut list_paths: Vec<PathBuf> = fs::read_dir(list_d)?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| is_apt_sources_file(path))
+            .collect();
+        list_paths.sort();
+        for path in list_paths {
+            extras.entries.extend(SourcesList::load(&path)?.entries);
+        }
+    }
 
-    for path in list_paths {
-        for entry in SourcesList::load(&path)?.entries {
-            let key = (
-                entry.uri.clone(),
-                entry.suite.clone(),
-                entry.components.join(","),
-            );
-            if existing.insert(key) {
-                all.entries.push(entry);
-            }
+    for entry in extras.entries {
+        let key = (
+            entry.uri.clone(),
+            entry.suite.clone(),
+            entry.components.join(","),
+        );
+        if existing.insert(key) {
+            all.entries.push(entry);
         }
     }
 
@@ -343,7 +353,10 @@ pub fn load_all_sources() -> Result<SourcesList> {
             let list_d = std::env::var("RAPTOR_SOURCES_LIST_D")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| default_sources_list_d());
-            merge_apt_list_d_extras(&mut list, &list_d)?;
+            let main = std::env::var("RAPTOR_SOURCES")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_sources_path());
+            merge_apt_source_extras(&mut list, &main, &list_d)?;
             return Ok(list);
         }
     }
@@ -352,7 +365,7 @@ pub fn load_all_sources() -> Result<SourcesList> {
         if config.paths.sources_d.is_dir() {
             let mut list = crate::sources_config::load_sources_from_dir(&config.paths.sources_d)?;
             if !list.entries.is_empty() {
-                merge_apt_list_d_extras(&mut list, &config.paths.sources_list_d)?;
+                merge_apt_source_extras(&mut list, &config.paths.sources, &config.paths.sources_list_d)?;
                 return Ok(list);
             }
         }
@@ -436,7 +449,7 @@ Components: main
     }
 
     #[test]
-    fn merges_supplemental_list_d_sources() {
+    fn merges_supplemental_apt_sources() {
         let dir = std::env::temp_dir().join(format!("raptor-merge-sources-{}", std::process::id()));
         let list_d = dir.join("list.d");
         let sources_d = dir.join("sources.d");
@@ -447,6 +460,16 @@ Components: main
         fs::write(
             sources_d.join("archive-ubuntu-com-ubuntu-resolute.yaml"),
             "kind: deb\nenabled: true\nuri: http://archive.ubuntu.com/ubuntu\nsuite: resolute\ncomponents:\n  - main\n",
+        )
+        .unwrap();
+        fs::write(
+            list_d.join("ubuntu.sources"),
+            r#"Types: deb
+URIs: http://archive.ubuntu.com/ubuntu
+Suites: resolute
+Components: main universe
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+"#,
         )
         .unwrap();
         fs::write(
@@ -461,11 +484,15 @@ Components: main
         std::env::remove_var("RAPTOR_SOURCES_D");
         std::env::remove_var("RAPTOR_SOURCES_LIST_D");
 
-        assert_eq!(sources.entries.len(), 2);
+        assert_eq!(sources.entries.len(), 3);
         assert!(sources
             .entries
             .iter()
             .any(|entry| entry.uri.contains("download.docker.com")));
+        assert!(sources.entries.iter().any(|entry| {
+            entry.uri.contains("archive.ubuntu.com")
+                && entry.components.iter().any(|c| c == "universe")
+        }));
 
         let _ = fs::remove_dir_all(&dir);
     }
