@@ -3,8 +3,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RAPTOR_BIN="${RAPTOR_BIN:-$ROOT/target/release/raptor}"
-RAPTOR_CLI="${RAPTOR_CLI:-$RAPTOR_BIN}"
+
+abs_path() {
+  local path="$1"
+  if [[ "$path" != /* ]]; then
+    path="$ROOT/$path"
+  fi
+  printf '%s' "$path"
+}
+
+RAPTOR_BIN="$(abs_path "${RAPTOR_BIN:-target/release/raptor}")"
+RAPTOR_CLI="$(abs_path "${RAPTOR_CLI:-$RAPTOR_BIN}")"
 VERSION="${VERSION:-0.1.0}"
 WORKDIR="${WORKDIR:-$ROOT/packaging/staging}"
 OUTPUT="${OUTPUT:-}"

@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -22,9 +25,49 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  release-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether to publish a release
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Manual release requested"
+            exit 0
+          fi
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Release tag push detected"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            BEFORE="${{ github.event.before }}"
+            if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+              OLD="$(git show "${BEFORE}:Cargo.toml" \
+                | awk '/^\[workspace.package\]/{found=1; next} found && /^version/{gsub(/.*"|".*/, ""); print; exit}')"
+              NEW="$(awk '/^\[workspace.package\]/{found=1; next} found && /^version/{gsub(/.*"|".*/, ""); print; exit}' Cargo.toml)"
+              if [ "$OLD" != "$NEW" ]; then
+                echo "should_release=true" >> "$GITHUB_OUTPUT"
+                echo "Version bump detected: ${OLD} -> ${NEW}"
+                exit 0
+              fi
+            fi
+          fi
+
+          echo "should_release=false" >> "$GITHUB_OUTPUT"
+          echo "No release trigger matched"
+
   build-release:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, release-gate]
+    if: needs.test.result == 'success' && needs.release-gate.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -56,6 +99,7 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
           if [ "$TAG" != "${{ steps.version.outputs.version }}" ]; then
@@ -105,11 +149,9 @@ jobs:
             packaging/target/raptor_${{ steps.version.outputs.version }}_${{ matrix.arch }}.deb
 
   release:
-    needs: build-release
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-release, release-gate]
+    if: needs.build-release.result == 'success' && needs.release-gate.outputs.should_release == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -143,11 +185,12 @@ jobs:
           mkdir -p release-assets
           mv "raptor-${VERSION}.tar.gz" "raptor-${VERSION}.zip" release-assets/
           find dist -type f -exec mv {} release-assets/ \;
+          ls -la release-assets/
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: v${{ steps.version.outputs.version }}
           name: raptor v${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: release-assets/*
