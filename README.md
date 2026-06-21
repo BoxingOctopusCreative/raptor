@@ -4,27 +4,28 @@ Raptor is a Rust implementation of an APT-compatible Linux package manager. It r
 
 ## Binaries
 
-| Command                | APT equivalent         | Purpose                                    |
-|------------------------|------------------------|--------------------------------------------|
-| `raptor pkg get`       | `apt-get install`      | Install Package                            |
-| `raptor pkg remove`    | `apt-get remove`       | Remove Package                             |
-| `raptor pkg search`    | `apt-cache search`     | Search for Package in local Cache          |
-| `raptor pkg info`      | `apt-cache show`       | Get info for package                       |
-| `raptor upgrade`       | `apt-get dist-upgrade` | Upgrade installed packages                 |
-| `raptor pkg list`      | `dpkg -l`              | List installed packages                    |
-| `raptor pkg init`      | -                      | Initialize package manifest (raptor.yaml)  |
-| `raptor pkg build`     | `dpkg-deb` / `debuild` | Build `.deb` package                       |
-| `raptor pkg publish`   | `reprepro` / `aptly`   | Publish `.deb` package                     |
-| `raptor repo update`   | `apt-get update`       | Update Package Cache                       |
-| `raptor repo priority` | `apt-cache policy`     | Get Priorities/Policies for Repos          |
-| `raptor repo add`      | -                      | Add non-PPA repository                     |
-| `raptor repo add-ppa`  | `add-apt-repository`   | Add PPA                                    |
-| `raptor repo remove-ppa` | -                    | Remove PPA                                 |
-| `raptor repo list`     | -                      | List configured repositories               |
-| `raptor repo create`   | -                      | Scaffold private/PPA repos and APT mirrors |
-| `raptor repo index`    | -                      | Regenerate repository indexes              |
-| `raptor repo sync`     | -                      | Sync an APT mirror from upstream           |
-| `raptor daemon`        | `unattended-upgrades`  | automatic update/upgrade daemon            |
+| Command                   | APT equivalent         | Purpose                                    |
+|---------------------------|------------------------|--------------------------------------------|
+| `raptor pkg get`          | `apt-get install`      | Install Package                            |
+| `raptor pkg remove`       | `apt-get remove`       | Remove Package                             |
+| `raptor pkg search`       | `apt-cache search`     | Search for Package in local Cache          |
+| `raptor pkg info`         | `apt-cache show`       | Get info for package                       |
+| `raptor upgrade`          | `apt-get dist-upgrade` | Upgrade installed packages                 |
+| `raptor pkg list`         | `dpkg -l`              | List installed packages                    |
+| `raptor pkg init`         | -                      | Initialize package manifest (raptor.yaml)  |
+| `raptor pkg build`        | `dpkg-deb` / `debuild` | Build `.deb` package                       |
+| `raptor pkg publish`      | `reprepro` / `aptly`   | Publish `.deb` package                     |
+| `raptor repo update`      | `apt-get update`       | Update Package Cache                       |
+| `raptor repo priority`    | `apt-cache policy`     | Get Priorities/Policies for Repos          |
+| `raptor repo add`         | -                      | Add non-PPA repository                     |
+| `raptor repo add-ppa`     | `add-apt-repository`   | Add PPA                                    |
+| `raptor repo remove-ppa`  | -                      | Remove PPA                                 |
+| `raptor repo list`        | -                      | List configured repositories               |
+| `raptor repo create`      | -                      | Scaffold private/PPA repos and APT mirrors |
+| `raptor repo index`       | -                      | Regenerate repository indexes              |
+| `raptor repo sync`        | -                      | Sync an APT mirror from upstream           |
+| `raptor repo apt-convert` | -                      | Convert APT sources.list to sources.d YAML |
+| `raptor daemon`           | `unattended-upgrades`  | automatic update/upgrade daemon            |
 
 ## Quick start
 
@@ -49,15 +50,25 @@ raptor --config ./config.yaml pkg list
 
 ## Configuration (YAML)
 
-Raptor-owned configuration uses YAML. Repository sources still use the standard APT `sources.list` format.
+Raptor-owned configuration uses YAML. When `/etc/raptor/sources.d/` contains repository files, Raptor loads them; otherwise it reads standard APT `sources.list` files.
 
-| File | Purpose |
-|------|---------|
-| `/etc/raptor/config.yaml` | Runtime paths, suite, security flags, unattended upgrades |
-| `/var/lib/raptor/state.yaml` | Installed package database |
-| `raptor.yaml` | Package build manifest (`raptor pkg init`) |
-| `repo.yaml` | Repository metadata (private, PPA, or mirror) |
-| `mirror.yaml` | APT mirror upstream and sync settings |
+Each file in `sources.d` defines one repository (or a multi-repo YAML document). This mirrors APT's `sources.list.d/*.list` layout.
+
+Convert existing APT sources:
+
+```bash
+sudo raptor repo apt-convert
+raptor repo apt-convert --stdout   # preview without writing
+```
+
+| File                         | Purpose                                                   |
+|------------------------------|-----------------------------------------------------------|
+| `/etc/raptor/config.yaml`    | Runtime paths, suite, security flags, unattended upgrades |
+| `/etc/raptor/sources.d/`     | Per-repository YAML files (Raptor-native sources)         |
+| `/var/lib/dpkg/status`       | Installed package database (dpkg format)                  |
+| `raptor.yaml`                | Package build manifest (`raptor pkg init`)                |
+| `repo.yaml`                  | Repository metadata (private, PPA, or mirror)             |
+| `mirror.yaml`                | APT mirror upstream and sync settings                     |
 
 Initialize system config:
 
@@ -72,16 +83,17 @@ Legacy `RAPTOR_*` environment variables still override YAML when set.
 
 ## Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RAPTOR_ROOT` | `/` | filesystem root for package extraction |
-| `RAPTOR_STATE` | `/var/lib/raptor/state.yaml` | installed package database |
-| `RAPTOR_CACHE` | `/var/cache/raptor` | package index cache |
-| `RAPTOR_ARCHIVES` | `/var/cache/apt/archives` | downloaded `.deb` cache |
-| `RAPTOR_SOURCES` | `/etc/apt/sources.list` | override sources list path |
+| Variable                | Default                   | Description |
+|-------------------------|---------------------------|-------------|
+| `RAPTOR_ROOT`           | `/`                       | filesystem root for package extraction |
+| `RAPTOR_STATE`          | `/var/lib/dpkg/status`    | installed package database (dpkg format; YAML/JSON for dev) |
+| `RAPTOR_CACHE`          | `/var/cache/raptor`       | package index cache |
+| `RAPTOR_ARCHIVES`       | `/var/cache/apt/archives` | downloaded `.deb` cache |
+| `RAPTOR_SOURCES_D`      | `/etc/raptor/sources.d`   | Raptor-native repository config directory |
+| `RAPTOR_SOURCES`        | `/etc/apt/sources.list`   | override sources list path |
 | `RAPTOR_SOURCES_LIST_D` | `/etc/apt/sources.list.d` | override sources.list.d directory |
-| `RAPTOR_KEYRINGS_DIR` | `/etc/apt/keyrings` | override PPA keyring directory |
-| `RAPTOR_SUITE` | from `/etc/os-release` | Ubuntu codename for PPAs (e.g. `jammy`) |
+| `RAPTOR_KEYRINGS_DIR`   | `/etc/apt/keyrings`       | override PPA keyring directory |
+| `RAPTOR_SUITE`          | from `/etc/os-release`    | Ubuntu codename for PPAs (e.g. `jammy`) |
 
 Use non-root paths for local testing:
 
@@ -289,5 +301,4 @@ Not yet implemented (contributions welcome):
 
 ## License
 
-MIT
-# raptor
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
