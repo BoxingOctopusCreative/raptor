@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use flate2::read::GzDecoder;
 
 use crate::error::{Error, Result};
+use crate::fs_util::{move_file, temp_file_in};
 use crate::release::ReleaseIndex;
 use crate::sources::{SourceEntry, SourceType, SourcesList};
 use crate::state::deb_architecture;
@@ -75,7 +76,7 @@ pub fn fetch_remote_indexes(
                     let Some(checksum) = index.checksum(rel_path) else {
                         continue;
                     };
-                    let temp = download_bytes(&url)?;
+                    let temp = download_bytes_near(&url, &cache_base)?;
                     verify_payload_checksums(&temp, checksum)?;
                     if rel_path.ends_with(".gz") {
                         let plain = cache_base.join("Packages");
@@ -84,11 +85,11 @@ pub fn fetch_remote_indexes(
                         plain
                     } else {
                         let plain = cache_base.join("Packages");
-                        fs::rename(&temp, &plain)?;
+                        move_file(&temp, &plain)?;
                         plain
                     }
                 } else if let Some((_, temp)) =
-                    try_download_first(&[url.clone()]).ok().flatten()
+                    try_download_first(&[url.clone()], &cache_base).ok().flatten()
                 {
                     if rel_path.ends_with(".gz") {
                         let plain = cache_base.join("Packages");
@@ -97,7 +98,7 @@ pub fn fetch_remote_indexes(
                         plain
                     } else {
                         let plain = cache_base.join("Packages");
-                        fs::rename(&temp, &plain)?;
+                        move_file(&temp, &plain)?;
                         plain
                     }
                 } else {
@@ -195,9 +196,9 @@ fn url_to_cache_name(uri: &str) -> String {
         .replace('/', "_")
 }
 
-fn try_download_first(urls: &[String]) -> Result<Option<(String, PathBuf)>> {
+fn try_download_first(urls: &[String], dir: &Path) -> Result<Option<(String, PathBuf)>> {
     for url in urls {
-        match download_bytes(url) {
+        match download_bytes_near(url, dir) {
             Ok(path) => return Ok(Some((url.clone(), path))),
             Err(e) => eprintln!("W: {e}"),
         }
@@ -209,13 +210,22 @@ pub fn download_bytes(url: &str) -> Result<PathBuf> {
     fetch_url(url)
 }
 
+pub fn download_bytes_near(url: &str, dir: &Path) -> Result<PathBuf> {
+    fetch_url_near(url, dir)
+}
+
 /// Fetch bytes from `http(s)://` or `file://` URLs (used by mirror sync tests with local mocks).
 pub fn fetch_url(url: &str) -> Result<PathBuf> {
+    fetch_url_near(url, std::env::temp_dir().as_path())
+}
+
+/// Fetch bytes into a temp file under `dir` so final moves stay on one filesystem.
+pub fn fetch_url_near(url: &str, dir: &Path) -> Result<PathBuf> {
     if let Some(local) = url.strip_prefix("file://") {
-        return copy_local_to_temp(Path::new(local));
+        return copy_local_to_temp_near(Path::new(local), dir);
     }
     if url.starts_with('/') {
-        return copy_local_to_temp(Path::new(url));
+        return copy_local_to_temp_near(Path::new(url), dir);
     }
 
     let mut response = ureq::get(url)
@@ -235,24 +245,18 @@ pub fn fetch_url(url: &str) -> Result<PathBuf> {
         .read_to_vec()
         .map_err(|e| Error::RemoteFetch(e.to_string()))?;
 
-    write_temp_bytes(&bytes)
+    write_temp_bytes_near(&bytes, dir)
 }
 
-fn copy_local_to_temp(path: &Path) -> Result<PathBuf> {
+fn copy_local_to_temp_near(path: &Path, dir: &Path) -> Result<PathBuf> {
     let bytes = fs::read(path).map_err(|e| {
         Error::RemoteFetch(format!("read {}: {e}", path.display()))
     })?;
-    write_temp_bytes(&bytes)
+    write_temp_bytes_near(&bytes, dir)
 }
 
-fn write_temp_bytes(bytes: &[u8]) -> Result<PathBuf> {
-    let temp = std::env::temp_dir().join(format!(
-        "raptor-fetch-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+fn write_temp_bytes_near(bytes: &[u8], dir: &Path) -> Result<PathBuf> {
+    let temp = temp_file_in(dir, "fetch")?;
     fs::write(&temp, bytes)?;
     Ok(temp)
 }

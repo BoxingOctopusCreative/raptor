@@ -2,11 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use md5::{Digest as Md5Digest, Md5};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::control::ControlFile;
 use crate::error::{Error, Result};
-use crate::remote::download_bytes;
+use crate::fs_util::move_file;
+use crate::remote::{download_bytes, download_bytes_near};
 use crate::repository::PackageIndexEntry;
 use crate::trust::{insecure_acquire_allowed, verify_packages_trust};
 use crate::verify::verify_deb_package_signature;
@@ -58,7 +59,7 @@ pub fn ensure_deb(entry: &PackageIndexEntry, ctx: &AcquireContext) -> Result<Pat
     }
 
     let url = build_package_url(source_uri, filename);
-    let temp = download_bytes(&url).map_err(|e| {
+    let temp = download_bytes_near(&url, &ctx.archives_dir).map_err(|e| {
         Error::PackageAcquire(format!(
             "failed to download {}: {e}",
             entry.control.package
@@ -75,7 +76,7 @@ pub fn ensure_deb(entry: &PackageIndexEntry, ctx: &AcquireContext) -> Result<Pat
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::rename(&temp, &dest)?;
+    move_file(&temp, &dest)?;
 
     Ok(dest)
 }

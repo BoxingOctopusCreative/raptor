@@ -7,7 +7,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use md5::{Digest as Md5Digest, Md5};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::control::ControlFile;
 use crate::error::Result;
@@ -24,6 +24,8 @@ pub struct PackageIndexEntry {
     pub signed_by: Option<String>,
     pub suite: Option<String>,
     pub component: Option<String>,
+    /// Repository pin priority (higher wins when package versions tie).
+    pub repo_priority: i32,
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +99,7 @@ impl PackageIndex {
                     signed_by: None,
                     suite: None,
                     component: None,
+                    repo_priority: 500,
                 });
         }
 
@@ -143,10 +146,14 @@ impl PackageIndex {
                         || arch == "all"
                 })
                 .max_by(|a, b| {
-                    crate::dependency::deb_version_compare(
+                    let version_cmp = crate::dependency::deb_version_compare(
                         &a.control.version,
                         &b.control.version,
-                    )
+                    );
+                    if version_cmp != std::cmp::Ordering::Equal {
+                        return version_cmp;
+                    }
+                    a.repo_priority.cmp(&b.repo_priority)
                 })
         })
     }
@@ -177,6 +184,7 @@ pub struct IndexSourceMeta {
     pub signed_by: Option<String>,
     pub suite: Option<String>,
     pub component: Option<String>,
+    pub priority: i32,
 }
 
 impl Repository {
@@ -201,6 +209,7 @@ impl Repository {
             signed_by: None,
             suite: None,
             component: None,
+            priority: 500,
         });
         Self::load_indexes_with_meta(paths, meta.as_ref())
     }
@@ -238,6 +247,7 @@ fn tag_index_entries(index: &mut PackageIndex, meta: &IndexSourceMeta, packages_
             if let Some(component) = &meta.component {
                 entry.component = Some(component.clone());
             }
+            entry.repo_priority = meta.priority;
             entry.packages_index_path = Some(packages_path.to_path_buf());
         }
     }
@@ -343,6 +353,7 @@ pub fn scan_pool_directory(pool: &Path, arch: &str) -> Result<PackageIndex> {
                 signed_by: None,
                 suite: None,
                 component: None,
+                repo_priority: 500,
             });
     }
 

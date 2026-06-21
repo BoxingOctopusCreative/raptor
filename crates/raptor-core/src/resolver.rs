@@ -62,9 +62,16 @@ impl<'a> Resolver<'a> {
             self.check_conflicts(&entry.control)?;
             to_install.insert(name.clone());
 
-            for dep in entry.control.depends_list() {
-                self.resolve_dependency(&dep, &mut queue, &to_install)?;
-            }
+            self.resolve_dependency_groups(
+                &entry.control.predepends_groups(),
+                &mut queue,
+                &to_install,
+            )?;
+            self.resolve_dependency_groups(
+                &entry.control.depends_groups(),
+                &mut queue,
+                &to_install,
+            )?;
 
             let action = if self.state.is_installed(&entry.control.package) {
                 ActionKind::Upgrade
@@ -84,10 +91,15 @@ impl<'a> Resolver<'a> {
         Ok(plan)
     }
 
-    pub fn plan_remove(&self, package_names: &[String]) -> Result<InstallPlan> {
+    pub fn plan_remove(&self, package_names: &[String], purge: bool) -> Result<InstallPlan> {
         let mut plan = InstallPlan::default();
         for name in package_names {
-            if !self.state.is_installed(name) {
+            let present = if purge {
+                self.state.is_purgeable(name)
+            } else {
+                self.state.is_removable(name)
+            };
+            if !present {
                 return Err(Error::PackageNotFound(format!("{name} is not installed")));
             }
             if let Some(installed) = self.state.get(name) {
@@ -122,22 +134,99 @@ impl<'a> Resolver<'a> {
         Ok(plan)
     }
 
-    fn resolve_dependency(
+    fn resolve_dependency_groups(
         &self,
-        dep: &Dependency,
+        groups: &[Vec<Dependency>],
         queue: &mut VecDeque<String>,
         chosen: &HashSet<String>,
     ) -> Result<()> {
+        for group in groups {
+            self.resolve_dependency_group(group, queue, chosen)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_dependency_group(
+        &self,
+        alternatives: &[Dependency],
+        queue: &mut VecDeque<String>,
+        chosen: &HashSet<String>,
+    ) -> Result<()> {
+        for dep in alternatives {
+            if self.is_dependency_satisfied(dep, chosen) {
+                return Ok(());
+            }
+        }
+
+        for dep in alternatives {
+            if self.try_queue_dependency(dep, queue, chosen)? {
+                return Ok(());
+            }
+        }
+
+        let names: Vec<_> = alternatives.iter().map(|dep| dep.name.as_str()).collect();
+        Err(Error::DependencyConflict(format!(
+            "unable to satisfy dependency: {}",
+            names.join(" | ")
+        )))
+    }
+
+    fn is_dependency_satisfied(&self, dep: &Dependency, chosen: &HashSet<String>) -> bool {
+        if !self.applies_to_arch(dep) {
+            return true;
+        }
+
         if self.state.is_installed(&dep.name) {
             if let Some(installed) = self.state.get(&dep.name) {
                 if dep.is_satisfied_by(&installed.name, &installed.version) {
-                    return Ok(());
+                    return true;
                 }
             }
         }
 
-        if chosen.contains(&dep.name) {
-            return Ok(());
+        for package in chosen {
+            if self.package_satisfies_dep(package, dep) {
+                return true;
+            }
+        }
+
+        for name in self.state.installed_names() {
+            if self.package_satisfies_dep(&name, dep) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn package_satisfies_dep(&self, package: &str, dep: &Dependency) -> bool {
+        let Some(entry) = self.index.get_best(package, &self.arch) else {
+            return package == dep.name && dep.constraints.is_empty();
+        };
+
+        if package == dep.name {
+            return dep.constraints.is_empty()
+                || dep
+                    .constraints
+                    .iter()
+                    .all(|constraint| constraint.satisfies(&entry.control.version));
+        }
+
+        entry
+            .control
+            .provides_list()
+            .iter()
+            .any(|provided| provided == &dep.name)
+    }
+
+    fn try_queue_dependency(
+        &self,
+        dep: &Dependency,
+        queue: &mut VecDeque<String>,
+        chosen: &HashSet<String>,
+    ) -> Result<bool> {
+        if !self.applies_to_arch(dep) {
+            return Ok(true);
         }
 
         if let Some(entry) = self.index.get_best(&dep.name, &self.arch) {
@@ -145,26 +234,31 @@ impl<'a> Resolver<'a> {
                 || dep
                     .constraints
                     .iter()
-                    .all(|c| c.satisfies(&entry.control.version))
+                    .all(|constraint| constraint.satisfies(&entry.control.version))
             {
-                queue.push_back(dep.name.clone());
-                return Ok(());
+                if !chosen.contains(&dep.name) && !self.state.is_installed(&dep.name) {
+                    queue.push_back(dep.name.clone());
+                }
+                return Ok(true);
             }
         }
 
         if let Some(provider) = self
             .find_providers(&dep.name)
             .into_iter()
-            .find(|p| !chosen.contains(p) && !self.state.is_installed(p))
+            .find(|provider| !chosen.contains(provider) && !self.state.is_installed(provider))
         {
             queue.push_back(provider);
-            return Ok(());
+            return Ok(true);
         }
 
-        Err(Error::DependencyConflict(format!(
-            "unable to satisfy dependency: {}",
-            dep.name
-        )))
+        Ok(false)
+    }
+
+    fn applies_to_arch(&self, dep: &Dependency) -> bool {
+        dep.arch_filter
+            .as_ref()
+            .is_none_or(|filter| filter == &self.arch)
     }
 
     fn find_providers(&self, virtual_name: &str) -> Vec<String> {
@@ -196,5 +290,107 @@ impl<'a> Resolver<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::control::ControlFile;
+    use crate::dependency::parse_dependency_groups;
+    use crate::repository::{PackageIndex, PackageIndexEntry};
+    use crate::state::State;
+
+    fn entry(
+        package: &str,
+        version: &str,
+        arch: &str,
+        depends: &str,
+        provides: &str,
+    ) -> PackageIndexEntry {
+        PackageIndexEntry {
+            control: ControlFile {
+                package: package.into(),
+                version: version.into(),
+                architecture: arch.into(),
+                depends: depends.into(),
+                provides: provides.into(),
+                ..ControlFile::default()
+            },
+            file_path: PathBuf::from(format!("/pool/{package}.deb")),
+            source_uri: None,
+            packages_index_path: None,
+            signed_by: None,
+            suite: None,
+            component: None,
+            repo_priority: 500,
+        }
+    }
+
+    fn index_with(entries: Vec<PackageIndexEntry>) -> PackageIndex {
+        let mut index = PackageIndex::default();
+        for entry in entries {
+            index
+                .packages
+                .entry(entry.control.package.clone())
+                .or_default()
+                .push(entry);
+        }
+        index
+    }
+
+    #[test]
+    fn resolves_or_dependency_with_virtual_provider() {
+        let index = index_with(vec![
+            entry(
+                "nginx-common",
+                "1.0-1",
+                "all",
+                "debconf (>= 0.5) | debconf-2.0",
+                "",
+            ),
+            entry("debconf", "1.5.86", "all", "", "debconf-2.0"),
+            entry(
+                "nginx",
+                "1.0-1",
+                "arm64",
+                "nginx-common (= 1.0-1)",
+                "",
+            ),
+        ]);
+        let state = State::default();
+        let resolver = Resolver::new(&index, &state, "arm64");
+        let plan = resolver
+            .plan_install(&["nginx".to_string()])
+            .expect("plan nginx");
+
+        let packages: Vec<_> = plan.actions.iter().map(|a| a.package.as_str()).collect();
+        assert!(packages.contains(&"nginx"));
+        assert!(packages.contains(&"nginx-common"));
+        assert!(packages.contains(&"debconf"));
+        assert_eq!(packages.len(), 3);
+    }
+
+    #[test]
+    fn satisfies_virtual_dependency_from_queued_provider() {
+        let index = index_with(vec![entry(
+            "debconf",
+            "1.5.86",
+            "all",
+            "",
+            "debconf-2.0",
+        )]);
+        let state = State::default();
+        let resolver = Resolver::new(&index, &state, "arm64");
+        let mut queue = VecDeque::from(["debconf".to_string()]);
+        let mut chosen = HashSet::new();
+        chosen.insert("debconf".to_string());
+
+        let group = parse_dependency_groups("debconf (>= 0.5) | debconf-2.0");
+        resolver
+            .resolve_dependency_group(&group[0], &mut queue, &chosen)
+            .expect("virtual dep satisfied by queued debconf");
     }
 }

@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod context;
 pub mod global;
+pub mod term;
 
 use std::path::PathBuf;
 
@@ -10,13 +11,13 @@ use commands::RepoCreateKind;
 use commands::{
     cmd_config_init, cmd_config_show, cmd_daemon, cmd_pkg_build, cmd_pkg_get, cmd_pkg_info,
     cmd_pkg_init, cmd_pkg_list, cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_search, cmd_repo_add,
-    cmd_repo_add_ppa, cmd_repo_create, cmd_repo_index, cmd_repo_list, cmd_repo_priority,
+    cmd_repo_add_ppa, cmd_repo_apt_convert, cmd_repo_create, cmd_repo_index, cmd_repo_list, cmd_repo_priority,
     cmd_repo_remove_ppa, cmd_repo_sync, cmd_repo_update, cmd_upgrade,
 };
 use global::GlobalOpts;
 
 #[derive(Parser)]
-#[command(name = "raptor", about = "APT-compatible package manager", version)]
+#[command(name = "raptor", about = "APT-compatible package manager", version, color = clap::ColorChoice::Auto)]
 pub struct Cli {
     /// Assume yes to all prompts
     #[arg(short = 'y', long, global = true)]
@@ -27,6 +28,9 @@ pub struct Cli {
     /// Path to config.yaml (default: /etc/raptor/config.yaml)
     #[arg(long, global = true, env = "RAPTOR_CONFIG")]
     pub config: Option<PathBuf>,
+    /// Colorize output (auto detects terminal; respects NO_COLOR)
+    #[arg(long, global = true, value_enum, default_value_t = clap::ColorChoice::Auto)]
+    pub color: clap::ColorChoice,
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -129,10 +133,19 @@ pub struct RepoArgs {
 pub enum RepoCommands {
     /// Update package indexes from configured sources
     Update,
-    /// Show package version priorities across repositories
+    /// Show or configure repository pin priorities
     Priority {
-        /// Package names
+        /// Package names to show version policy for (omit to list repository order)
         packages: Vec<String>,
+        /// Repository id to set pin priority for (use with --priority)
+        #[arg(long)]
+        set: Option<String>,
+        /// Pin priority value (use with --set)
+        #[arg(long)]
+        priority: Option<i32>,
+        /// Reorder repositories (first id = highest priority)
+        #[arg(long, num_args = 1..)]
+        reorder: Vec<String>,
     },
     /// Add a non-PPA repository
     Add {
@@ -198,6 +211,21 @@ pub enum RepoCommands {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Convert APT sources.list files to Raptor sources.d YAML files
+    AptConvert {
+        /// Output directory for per-repo YAML files (default: /etc/raptor/sources.d)
+        #[arg(long, default_value = "/etc/raptor/sources.d")]
+        output: PathBuf,
+        /// APT sources.list path (default: from config)
+        #[arg(long)]
+        sources: Option<PathBuf>,
+        /// APT sources.list.d directory (default: from config)
+        #[arg(long)]
+        sources_list_d: Option<PathBuf>,
+        /// Print YAML to stdout instead of writing a file
+        #[arg(long)]
+        stdout: bool,
+    },
 }
 
 #[derive(Args)]
@@ -218,6 +246,7 @@ pub enum ConfigCommands {
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<()> {
+    term::init(cli.color);
     let global = GlobalOpts {
         yes: cli.yes,
         dry_run: cli.dry_run,
@@ -255,7 +284,12 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         },
         Commands::Repo(args) => match args.command {
             RepoCommands::Update => cmd_repo_update(),
-            RepoCommands::Priority { packages } => cmd_repo_priority(packages),
+            RepoCommands::Priority {
+                packages,
+                set,
+                priority,
+                reorder,
+            } => cmd_repo_priority(packages, set, priority, reorder),
             RepoCommands::Add {
                 uri,
                 suite,
@@ -286,6 +320,12 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
                 arch,
             } => cmd_repo_index(repo, suite, codename, component, arch),
             RepoCommands::Sync { root } => cmd_repo_sync(root),
+            RepoCommands::AptConvert {
+                output,
+                sources,
+                sources_list_d,
+                stdout,
+            } => cmd_repo_apt_convert(output, sources, sources_list_d, stdout),
         },
         Commands::Daemon { once } => cmd_daemon(once, &global),
         Commands::Config(args) => match args.command {

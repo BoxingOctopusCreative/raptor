@@ -1,0 +1,11 @@
+package:
+  name: raptor
+  version: 0.1.0
+  architecture: arm64
+  maintainer: BoxingOctopus <packages@boxingoctopus.com>
+  description: APT-compatible Linux package manager
+  section: utils
+  priority: optional
+data:
+  source: data
+  dest_prefix: usr/local

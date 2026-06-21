@@ -12,6 +12,8 @@ pub struct SourceEntry {
     pub architectures: Vec<String>,
     pub enabled: bool,
     pub signed_by: Option<String>,
+    /// Repository pin priority (higher wins when package versions tie).
+    pub priority: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +30,11 @@ pub struct SourcesList {
 impl SourcesList {
     pub fn load(path: &Path) -> Result<Self> {
         let content = fs::read_to_string(path)?;
-        Self::parse(&content)
+        if is_deb822_sources_path(path) || looks_like_deb822(&content) {
+            Self::parse_deb822(&content)
+        } else {
+            Self::parse(&content)
+        }
     }
 
     pub fn parse(content: &str) -> Result<Self> {
@@ -73,8 +79,63 @@ impl SourcesList {
                 architectures: Vec::new(),
                 enabled,
                 signed_by,
+                priority: 500,
             });
         }
+        Ok(Self { entries })
+    }
+
+    /// Parse APT deb822-format `.sources` files (Ubuntu 24.04+ default).
+    pub fn parse_deb822(content: &str) -> Result<Self> {
+        let mut entries = Vec::new();
+
+        for stanza in parse_deb822_stanzas(content) {
+            let enabled = stanza
+                .get("enabled")
+                .map(|values| {
+                    !values
+                        .iter()
+                        .any(|value| value.eq_ignore_ascii_case("no"))
+                })
+                .unwrap_or(true);
+            if !enabled {
+                continue;
+            }
+
+            let types = deb822_source_types(stanza.get("types"));
+            let uris = deb822_field_values(stanza.get("uris"));
+            let suites = deb822_field_values(stanza.get("suites").or(stanza.get("suite")));
+            let components = deb822_field_values(stanza.get("components"));
+            let architectures = deb822_field_values(stanza.get("architectures"));
+            let signed_by = stanza
+                .get("signed-by")
+                .and_then(|values| values.first())
+                .cloned();
+
+            if uris.is_empty() || suites.is_empty() {
+                return Err(Error::InvalidSources(
+                    "deb822 stanza missing URIs or Suites".into(),
+                ));
+            }
+
+            for source_type in types {
+                for uri in &uris {
+                    for suite in &suites {
+                        entries.push(SourceEntry {
+                            source_type,
+                            uri: uri.clone(),
+                            suite: suite.clone(),
+                            components: components.clone(),
+                            architectures: architectures.clone(),
+                            enabled: true,
+                            signed_by: signed_by.clone(),
+                            priority: 500,
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(Self { entries })
     }
 
@@ -141,6 +202,82 @@ pub fn default_keyrings_dir() -> PathBuf {
     PathBuf::from("/etc/apt/keyrings")
 }
 
+pub fn is_apt_sources_file(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|ext| ext == "list" || ext == "sources")
+}
+
+fn is_deb822_sources_path(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == "sources")
+}
+
+fn looks_like_deb822(content: &str) -> bool {
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .is_some_and(|line| line.contains(':') && !line.starts_with("deb "))
+}
+
+fn parse_deb822_stanzas(content: &str) -> Vec<std::collections::HashMap<String, Vec<String>>> {
+    use std::collections::HashMap;
+
+    let mut stanzas = Vec::new();
+    let mut current: HashMap<String, Vec<String>> = HashMap::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if !current.is_empty() {
+                stanzas.push(current);
+                current = HashMap::new();
+            }
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            current
+                .entry(key.trim().to_ascii_lowercase())
+                .or_default()
+                .extend(value.split_whitespace().map(str::to_string));
+        }
+    }
+
+    if !current.is_empty() {
+        stanzas.push(current);
+    }
+
+    stanzas
+}
+
+fn deb822_field_values(values: Option<&Vec<String>>) -> Vec<String> {
+    values
+        .map(|values| {
+            values
+                .iter()
+                .flat_map(|value| value.split_whitespace().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deb822_source_types(values: Option<&Vec<String>>) -> Vec<SourceType> {
+    let mut types = Vec::new();
+    for value in deb822_field_values(values) {
+        match value.as_str() {
+            "deb" => types.push(SourceType::Deb),
+            "deb-src" => types.push(SourceType::DebSrc),
+            _ => {}
+        }
+    }
+    if types.is_empty() {
+        types.push(SourceType::Deb);
+    }
+    types
+}
+
 fn parse_source_options(parts: Vec<&str>) -> Result<(Option<String>, Vec<&str>)> {
     if let Some(first) = parts.first() {
         if first.starts_with('[') && first.ends_with(']') {
@@ -155,7 +292,72 @@ fn parse_source_options(parts: Vec<&str>) -> Result<(Option<String>, Vec<&str>)>
     Ok((None, parts))
 }
 
+/// Merge `sources.list.d/*.list` entries not already present (e.g. after `raptor repo add`).
+fn merge_apt_list_d_extras(all: &mut SourcesList, list_d: &Path) -> Result<()> {
+    use std::collections::HashSet;
+
+    if !list_d.is_dir() {
+        return Ok(());
+    }
+
+    let mut existing: HashSet<(String, String, String)> = all
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.uri.clone(),
+                entry.suite.clone(),
+                entry.components.join(","),
+            )
+        })
+        .collect();
+
+    let mut list_paths: Vec<PathBuf> = fs::read_dir(list_d)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "list"))
+        .collect();
+    list_paths.sort();
+
+    for path in list_paths {
+        for entry in SourcesList::load(&path)?.entries {
+            let key = (
+                entry.uri.clone(),
+                entry.suite.clone(),
+                entry.components.join(","),
+            );
+            if existing.insert(key) {
+                all.entries.push(entry);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn load_all_sources() -> Result<SourcesList> {
+    if let Ok(path) = std::env::var("RAPTOR_SOURCES_D") {
+        let path = Path::new(&path);
+        if path.is_dir() {
+            let mut list = crate::sources_config::load_sources_from_dir(path)?;
+            let list_d = std::env::var("RAPTOR_SOURCES_LIST_D")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| default_sources_list_d());
+            merge_apt_list_d_extras(&mut list, &list_d)?;
+            return Ok(list);
+        }
+    }
+
+    if let Ok(config) = crate::config::RaptorConfig::load() {
+        if config.paths.sources_d.is_dir() {
+            let mut list = crate::sources_config::load_sources_from_dir(&config.paths.sources_d)?;
+            if !list.entries.is_empty() {
+                merge_apt_list_d_extras(&mut list, &config.paths.sources_list_d)?;
+                return Ok(list);
+            }
+        }
+    }
+
     if let Ok(path) = std::env::var("RAPTOR_SOURCES") {
         return SourcesList::load(Path::new(&path));
     }
@@ -170,7 +372,7 @@ pub fn load_all_sources() -> Result<SourcesList> {
         for entry in fs::read_dir(list_d)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "list") {
+            if is_apt_sources_file(&path) {
                 all.entries.extend(SourcesList::load(&path)?.entries);
             }
         }
@@ -193,5 +395,78 @@ mod tests {
         );
         assert_eq!(sources.entries[0].uri, "https://ppa.launchpadcontent.net/user/repo/ubuntu");
         assert_eq!(sources.entries[0].suite, "jammy");
+    }
+
+    #[test]
+    fn parses_deb822_sources() {
+        let content = r#"Types: deb
+URIs: http://archive.ubuntu.com/ubuntu
+Suites: resolute resolute-updates
+Components: main universe
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.ubuntu.com/ubuntu
+Suites: resolute-security
+Components: main
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+"#;
+        let sources = SourcesList::parse_deb822(content).unwrap();
+        assert_eq!(sources.entries.len(), 3);
+        assert_eq!(sources.entries[0].uri, "http://archive.ubuntu.com/ubuntu");
+        assert_eq!(sources.entries[0].suite, "resolute");
+        assert_eq!(sources.entries[0].components, vec!["main", "universe"]);
+        assert_eq!(
+            sources.entries[0].signed_by.as_deref(),
+            Some("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
+        );
+        assert_eq!(sources.entries[2].suite, "resolute-security");
+    }
+
+    #[test]
+    fn skips_disabled_deb822_stanza() {
+        let content = r#"Enabled: no
+Types: deb
+URIs: http://example.com/ubuntu
+Suites: jammy
+Components: main
+"#;
+        let sources = SourcesList::parse_deb822(content).unwrap();
+        assert!(sources.entries.is_empty());
+    }
+
+    #[test]
+    fn merges_supplemental_list_d_sources() {
+        let dir = std::env::temp_dir().join(format!("raptor-merge-sources-{}", std::process::id()));
+        let list_d = dir.join("list.d");
+        let sources_d = dir.join("sources.d");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&list_d).unwrap();
+        fs::create_dir_all(&sources_d).unwrap();
+
+        fs::write(
+            sources_d.join("archive-ubuntu-com-ubuntu-resolute.yaml"),
+            "kind: deb\nenabled: true\nuri: http://archive.ubuntu.com/ubuntu\nsuite: resolute\ncomponents:\n  - main\n",
+        )
+        .unwrap();
+        fs::write(
+            list_d.join("raptor-download-docker-com-linux-ubuntu.list"),
+            "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu resolute stable\n",
+        )
+        .unwrap();
+
+        std::env::set_var("RAPTOR_SOURCES_D", &sources_d);
+        std::env::set_var("RAPTOR_SOURCES_LIST_D", &list_d);
+        let sources = load_all_sources().unwrap();
+        std::env::remove_var("RAPTOR_SOURCES_D");
+        std::env::remove_var("RAPTOR_SOURCES_LIST_D");
+
+        assert_eq!(sources.entries.len(), 2);
+        assert!(sources
+            .entries
+            .iter()
+            .any(|entry| entry.uri.contains("download.docker.com")));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -23,6 +23,7 @@ fn remote_acquire_requires_trust_record() {
         signed_by: Some(keyring.to_string_lossy().into_owned()),
         suite: Some("jammy".into()),
         component: Some("main".into()),
+        repo_priority: 500,
     };
 
     std::env::remove_var("RAPTOR_ALLOW_INSECURE");

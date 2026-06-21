@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use md5::{Digest as Md5Digest, Md5};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 use crate::error::{Error, Result};
 use crate::release::{extract_inrelease_body, ReleaseChecksum, ReleaseIndex};

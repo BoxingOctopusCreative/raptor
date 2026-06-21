@@ -2,10 +2,56 @@ use crate::config::{RaptorConfig, UnattendedConfig};
 use crate::error::Result;
 use crate::installer::InstallContext;
 use crate::remote::fetch_remote_indexes;
-use crate::repository::{PackageIndex, Repository};
+use crate::repository::{IndexSourceMeta, PackageIndex, Repository};
 use crate::resolver::Resolver;
-use crate::sources::load_all_sources;
+use crate::sources::{load_all_sources, SourceType, SourcesList};
 use crate::state::{deb_architecture, detect_architecture, State};
+
+fn load_merged_index(sources: &SourcesList, cache_dir: &std::path::Path, arch: &str) -> Result<PackageIndex> {
+    let mut index = PackageIndex::default();
+    for root in sources.local_repo_roots() {
+        if let Ok(repo) = Repository::open(&root) {
+            index.merge(repo.index);
+        }
+    }
+
+    for source in &sources.entries {
+        if !source.enabled || source.source_type != SourceType::Deb {
+            continue;
+        }
+        if !source.uri.starts_with("http://") && !source.uri.starts_with("https://") {
+            continue;
+        }
+        for component in &source.components {
+            let local = cache_dir.join(
+                source
+                    .uri
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .replace('/', "_"),
+            )
+            .join(format!(
+                "dists/{}/{}/binary-{}/Packages",
+                source.suite, component, arch
+            ));
+            if !local.exists() {
+                continue;
+            }
+            let meta = IndexSourceMeta {
+                source_uri: Some(source.uri.clone()),
+                signed_by: source.signed_by.clone(),
+                suite: Some(source.suite.clone()),
+                component: Some(component.clone()),
+                priority: source.priority,
+            };
+            if let Ok(cached) = Repository::load_indexes_with_meta(&[local], Some(&meta)) {
+                index.merge(cached);
+            }
+        }
+    }
+
+    Ok(index)
+}
 
 /// Run one unattended maintenance cycle: update indexes and optionally upgrade packages.
 pub fn run_unattended_cycle(config: &RaptorConfig, apply: bool) -> Result<UnattendedReport> {
@@ -43,16 +89,7 @@ pub fn run_unattended_cycle(config: &RaptorConfig, apply: bool) -> Result<Unatte
     }
 
     let state = State::load(&config.paths.state)?;
-    let mut index = PackageIndex::default();
-    for root in sources.local_repo_roots() {
-        if let Ok(repo) = Repository::open(&root) {
-            index.merge(repo.index);
-        }
-    }
-    let paths = crate::remote::remote_package_index_paths(&sources, &config.paths.cache, &arch);
-    if let Ok(cached) = Repository::load_indexes(&paths) {
-        index.merge(cached);
-    }
+    let index = load_merged_index(&sources, &config.paths.cache, &arch)?;
 
     let resolver = Resolver::new(&index, &state, &arch);
     let plan = resolver.plan_upgrade()?;

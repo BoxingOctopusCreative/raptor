@@ -23,6 +23,7 @@ fn ensure_deb_uses_local_pool_file() {
         signed_by: None,
         suite: None,
         component: None,
+        repo_priority: 500,
     };
 
     let archives = std::env::temp_dir().join(format!("raptor-archives-{}", std::process::id()));

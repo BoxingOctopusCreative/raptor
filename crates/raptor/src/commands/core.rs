@@ -1,20 +1,20 @@
-use std::io::{self, Write};
-
 use raptor_core::acquire::{build_package_url, ensure_deb, AcquireContext};
-use raptor_core::deb::{extract_deb_to, read_deb};
+use raptor_core::control::ControlFile;
+use raptor_core::deb::{extract_deb_to, read_deb, remove_deb_from};
 use raptor_core::remote::fetch_remote_indexes;
 use raptor_core::repository::{scan_pool_directory, write_packages_index};
 use raptor_core::resolver::{ActionKind, Resolver};
 
 use crate::context::Context;
 use crate::global::GlobalOpts;
+use crate::term;
 
 pub fn cmd_update() -> anyhow::Result<()> {
     let ctx = Context::load()?;
-    println!("Hit:1 Raptor package index update");
+    term::hit("Raptor package index update");
 
     for (url, _) in fetch_remote_indexes(&ctx.sources, &ctx.cache_dir, &ctx.arch)? {
-        println!("Get:1 {url} [Updated]");
+        term::get(format!("{url} [Updated]"));
     }
 
     for root in ctx.sources.local_repo_roots() {
@@ -36,10 +36,10 @@ pub fn cmd_update() -> anyhow::Result<()> {
                 write_packages_index(&packages_dir.join("Packages.gz"), &index)?;
             }
         }
-        println!("Get:1 file:{} [Updated]", root.display());
+        term::get(format!("file:{} [Updated]", root.display()));
     }
 
-    println!("Reading package lists... Done");
+    term::done("Reading package lists...");
     Ok(())
 }
 
@@ -49,13 +49,13 @@ pub fn cmd_upgrade(global: &GlobalOpts) -> anyhow::Result<()> {
     let plan = resolver.plan_upgrade()?;
 
     if plan.actions.is_empty() {
-        println!("0 upgraded, 0 newly installed, 0 to remove.");
+        term::note_line("0 upgraded, 0 newly installed, 0 to remove.");
         return Ok(());
     }
 
     print_plan(&plan.actions);
     if !global.dry_run && confirm(global.yes)? {
-        execute_plan(&mut ctx, &plan)?;
+        execute_plan(&mut ctx, &plan, false)?;
     }
     Ok(())
 }
@@ -71,7 +71,7 @@ pub fn cmd_install(packages: Vec<String>, global: &GlobalOpts) -> anyhow::Result
 
     print_plan(&plan.actions);
     if !global.dry_run && confirm(global.yes)? {
-        execute_plan(&mut ctx, &plan)?;
+        execute_plan(&mut ctx, &plan, false)?;
     }
     Ok(())
 }
@@ -83,16 +83,11 @@ pub fn cmd_remove(packages: Vec<String>, purge: bool, global: &GlobalOpts) -> an
 
     let mut ctx = Context::load()?;
     let resolver = Resolver::new(&ctx.index, &ctx.state, &ctx.arch);
-    let plan = resolver.plan_remove(&packages)?;
+    let plan = resolver.plan_remove(&packages, purge)?;
 
     print_plan(&plan.actions);
     if !global.dry_run && confirm(global.yes)? {
-        execute_plan(&mut ctx, &plan)?;
-        if purge {
-            for pkg in &packages {
-                println!("Purging configuration for {pkg} ...");
-            }
-        }
+        execute_plan(&mut ctx, &plan, purge)?;
     }
     Ok(())
 }
@@ -102,7 +97,7 @@ pub fn cmd_search(pattern: String) -> anyhow::Result<()> {
     let results = ctx.index.search(&pattern);
     for entry in results {
         let desc = entry.control.description.lines().next().unwrap_or("");
-        println!("{} - {}", entry.control.package, desc);
+        term::search_result(&entry.control.package, desc);
     }
     Ok(())
 }
@@ -115,21 +110,21 @@ pub fn cmd_info(package: String) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("package '{package}' not found"))?;
 
     let c = &entry.control;
-    println!("Package: {}", c.package);
-    println!("Version: {}", c.version);
-    println!("Architecture: {}", c.architecture);
+    term::info_field("Package", &c.package);
+    term::info_field("Version", &c.version);
+    term::info_field("Architecture", &c.architecture);
     if !c.maintainer.is_empty() {
-        println!("Maintainer: {}", c.maintainer);
+        term::info_field("Maintainer", &c.maintainer);
     }
     if !c.depends.is_empty() {
-        println!("Depends: {}", c.depends);
+        term::info_field("Depends", &c.depends);
     }
-    println!("Description: {}", c.description);
+    term::info_field("Description", &c.description);
     if !c.filename.is_empty() {
-        println!("Filename: {}", c.filename);
+        term::info_field("Filename", &c.filename);
     }
     if !c.size.is_empty() {
-        println!("Size: {}", c.size);
+        term::info_field("Size", &c.size);
     }
     Ok(())
 }
@@ -140,10 +135,7 @@ pub fn cmd_list() -> anyhow::Result<()> {
     names.sort();
     for name in names {
         if let Some(pkg) = ctx.state.get(&name) {
-            println!(
-                "{}/{} {} {}",
-                pkg.name, pkg.version, pkg.architecture, pkg.status
-            );
+            term::installed_pkg(&pkg.name, &pkg.version, &pkg.architecture, &pkg.status);
         }
     }
     Ok(())
@@ -152,15 +144,17 @@ pub fn cmd_list() -> anyhow::Result<()> {
 fn print_plan(actions: &[raptor_core::resolver::InstallAction]) {
     for action in actions {
         match action.action {
-            ActionKind::Install => println!(
-                "Inst {} {} [{}]",
-                action.package, action.version, action.deb_path.display()
+            ActionKind::Install => term::plan_install(
+                &action.package,
+                &action.version,
+                &action.deb_path.display().to_string(),
             ),
-            ActionKind::Upgrade => println!(
-                "Upgr {} {} [{}]",
-                action.package, action.version, action.deb_path.display()
+            ActionKind::Upgrade => term::plan_upgrade(
+                &action.package,
+                &action.version,
+                &action.deb_path.display().to_string(),
             ),
-            ActionKind::Remove => println!("Remv {} {}", action.package, action.version),
+            ActionKind::Remove => term::plan_remove(&action.package, &action.version),
         }
     }
 }
@@ -169,16 +163,17 @@ fn confirm(yes: bool) -> anyhow::Result<bool> {
     if yes {
         return Ok(true);
     }
-    print!("Do you want to continue? [Y/n] ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
+
+    let input = term::confirm_read_line().map_err(|e| {
+        anyhow::anyhow!("cannot read confirmation (try -y in non-interactive mode): {e}")
+    })?;
     Ok(!input.trim().eq_ignore_ascii_case("n"))
 }
 
 fn execute_plan(
     ctx: &mut Context,
     plan: &raptor_core::resolver::InstallPlan,
+    purge: bool,
 ) -> anyhow::Result<()> {
     for action in &plan.actions {
         match action.action {
@@ -194,26 +189,66 @@ fn execute_plan(
                 };
                 let deb_path = ensure_deb(entry, &acquire_ctx).map_err(|e| anyhow::anyhow!("{e}"))?;
                 if !action.deb_path.exists() && entry.source_uri.is_some() {
-                    println!(
-                        "Get:1 {} [{}]",
+                    term::get(format!(
+                        "{} [{}]",
                         build_package_url(
                             entry.source_uri.as_ref().unwrap(),
                             &entry.control.filename
                         ),
                         deb_path.display()
-                    );
+                    ));
                 }
                 let deb = read_deb(&deb_path)?;
                 extract_deb_to(&ctx.install_root, &deb_path)?;
                 ctx.state.install(&deb.control);
-                println!("Setting up {} ({}) ...", action.package, action.version);
+                term::setting_up(&action.package, &action.version);
             }
             ActionKind::Remove => {
-                ctx.state.remove(&action.package);
-                println!("Removing {} ({}) ...", action.package, action.version);
+                term::removing(&action.package, &action.version);
+                if let Some(deb_path) = resolve_installed_deb(ctx, &action.package, &action.version)
+                {
+                    remove_deb_from(&ctx.install_root, &deb_path, purge)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                }
+                if purge {
+                    ctx.state.purge(&action.package);
+                } else if !ctx.state.remove(&action.package) {
+                    anyhow::bail!("package {} is not installed", action.package);
+                }
             }
         }
     }
     ctx.save()?;
     Ok(())
+}
+
+fn resolve_installed_deb(
+    ctx: &Context,
+    package: &str,
+    version: &str,
+) -> Option<std::path::PathBuf> {
+    let installed = ctx.state.get(package)?;
+    let control = ControlFile {
+        package: package.to_string(),
+        version: version.to_string(),
+        architecture: installed.architecture.clone(),
+        ..ControlFile::default()
+    };
+
+    let archives_path = ctx.archives_dir.join(control.full_name());
+    if archives_path.is_file() {
+        return Some(archives_path);
+    }
+
+    if let Some(entry) = ctx.index.get_best(package, &ctx.arch) {
+        if entry.file_path.is_file() {
+            return Some(entry.file_path.clone());
+        }
+        let indexed = ctx.archives_dir.join(entry.control.full_name());
+        if indexed.is_file() {
+            return Some(indexed);
+        }
+    }
+
+    None
 }

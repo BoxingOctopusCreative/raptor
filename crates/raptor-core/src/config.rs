@@ -34,6 +34,8 @@ pub struct PathsConfig {
     pub sources_list_d: PathBuf,
     #[serde(default = "default_keyrings")]
     pub keyrings: PathBuf,
+    #[serde(default = "default_sources_d")]
+    pub sources_d: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ impl Default for PathsConfig {
             sources: default_sources(),
             sources_list_d: default_sources_list_d(),
             keyrings: default_keyrings(),
+            sources_d: default_sources_d(),
         }
     }
 }
@@ -127,7 +130,7 @@ fn default_root() -> PathBuf {
 }
 
 fn default_state() -> PathBuf {
-    PathBuf::from("/var/lib/raptor/state.yaml")
+    PathBuf::from("/var/lib/dpkg/status")
 }
 
 fn default_cache() -> PathBuf {
@@ -152,6 +155,10 @@ fn default_sources_list_d() -> PathBuf {
 
 fn default_keyrings() -> PathBuf {
     PathBuf::from("/etc/apt/keyrings")
+}
+
+fn default_sources_d() -> PathBuf {
+    PathBuf::from("/etc/raptor/sources.d")
 }
 
 fn default_interval_hours() -> u64 {
@@ -221,6 +228,9 @@ impl RaptorConfig {
         if let Ok(v) = std::env::var("RAPTOR_KEYRINGS_DIR") {
             cfg.paths.keyrings = PathBuf::from(v);
         }
+        if let Ok(v) = std::env::var("RAPTOR_SOURCES_D") {
+            cfg.paths.sources_d = PathBuf::from(v);
+        }
         if let Ok(v) = std::env::var("RAPTOR_SUITE") {
             cfg.system.suite = Some(v);
         }
@@ -253,6 +263,10 @@ impl RaptorConfig {
             self.paths.sources_list_d.to_string_lossy().as_ref(),
         );
         std::env::set_var("RAPTOR_KEYRINGS_DIR", self.paths.keyrings.to_string_lossy().as_ref());
+        std::env::set_var(
+            "RAPTOR_SOURCES_D",
+            self.paths.sources_d.to_string_lossy().as_ref(),
+        );
         if let Some(suite) = &self.system.suite {
             std::env::set_var("RAPTOR_SUITE", suite);
         }
@@ -284,7 +298,7 @@ mod tests {
         let yaml = r#"
 paths:
   root: /
-  state: /var/lib/raptor/state.yaml
+  state: /var/lib/dpkg/status
 system:
   suite: jammy
   allow_insecure: false

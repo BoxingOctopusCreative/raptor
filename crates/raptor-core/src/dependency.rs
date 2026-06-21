@@ -20,13 +20,21 @@ pub enum VersionConstraint {
 }
 
 pub fn parse_dependency_list(input: &str) -> Vec<Dependency> {
+    parse_dependency_groups(input)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Comma-separated AND groups; each group is pipe-separated OR alternatives.
+pub fn parse_dependency_groups(input: &str) -> Vec<Vec<Dependency>> {
     if input.trim().is_empty() {
         return Vec::new();
     }
 
     input
         .split(',')
-        .flat_map(parse_alternative_group)
+        .map(parse_alternative_group)
         .collect()
 }
 
@@ -193,5 +201,16 @@ mod tests {
         ));
         assert_eq!(deps[1].name, "bash");
         assert_eq!(deps[2].name, "dash");
+    }
+
+    #[test]
+    fn parses_dependency_groups() {
+        let groups = parse_dependency_groups("libc6 (>= 2.34), bash | dash");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 1);
+        assert_eq!(groups[0][0].name, "libc6");
+        assert_eq!(groups[1].len(), 2);
+        assert_eq!(groups[1][0].name, "bash");
+        assert_eq!(groups[1][1].name, "dash");
     }
 }

@@ -175,6 +175,7 @@ mod tests {
             signed_by: Some(record.keyring.clone()),
             suite: Some(record.suite.clone()),
             component: Some(record.component.clone()),
+            repo_priority: 500,
         };
 
         verify_packages_trust(&entry).unwrap();

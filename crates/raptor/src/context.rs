@@ -5,6 +5,8 @@ use raptor_core::repository::{IndexSourceMeta, PackageIndex, Repository};
 use raptor_core::sources::{load_all_sources, SourceType, SourcesList};
 use raptor_core::state::{deb_architecture, detect_architecture, State};
 
+use crate::term;
+
 pub struct Context {
     pub state: State,
     pub index: PackageIndex,
@@ -30,7 +32,7 @@ impl Context {
         let sources = match load_all_sources() {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("W: failed to load sources: {e}");
+                term::warn_line(format!("failed to load sources: {e}"));
                 SourcesList::default()
             }
         };
@@ -70,6 +72,7 @@ impl Context {
                     signed_by: source.signed_by.clone(),
                     suite: Some(source.suite.clone()),
                     component: Some(component.clone()),
+                    priority: source.priority,
                 };
                 if let Ok(cached) = Repository::load_indexes_with_meta(&[local], Some(&meta)) {
                     index.merge(cached);

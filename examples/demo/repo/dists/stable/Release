@@ -2,7 +2,7 @@ Origin: Raptor
 Label: Raptor Repository
 Suite: stable
 Codename: stable
-Date: Sat, 20 Jun 2026 20:58:56 +0000
+Date: Sat, 20 Jun 2026 13:52:40 +0000
 Architectures: amd64 arm64 all
 Components: main
 

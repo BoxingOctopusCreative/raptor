@@ -8,7 +8,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("E: {e}");
+            raptor::term::error_line(format!("{e}"));
             ExitCode::from(100)
         }
     }

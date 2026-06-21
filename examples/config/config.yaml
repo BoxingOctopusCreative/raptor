@@ -1,11 +1,12 @@
 paths:
   root: /
-  state: /var/lib/raptor/state.yaml
+  state: /var/lib/dpkg/status
   cache: /var/cache/raptor
   archives: /var/cache/apt/archives
   config_dir: /etc/raptor
   sources: /etc/apt/sources.list
   sources_list_d: /etc/apt/sources.list.d
+  sources_d: /etc/raptor/sources.d
   keyrings: /etc/apt/keyrings
 
 system:

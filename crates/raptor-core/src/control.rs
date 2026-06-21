@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dependency::{parse_dependency_list, Dependency};
+use crate::dependency::{parse_dependency_groups, parse_dependency_list, Dependency};
 use crate::error::{Error, Result};
 
 /// Debian control file fields for a binary package.
@@ -186,8 +186,16 @@ impl ControlFile {
         parse_dependency_list(&self.depends)
     }
 
+    pub fn depends_groups(&self) -> Vec<Vec<Dependency>> {
+        parse_dependency_groups(&self.depends)
+    }
+
     pub fn predepends_list(&self) -> Vec<Dependency> {
         parse_dependency_list(&self.predepends)
+    }
+
+    pub fn predepends_groups(&self) -> Vec<Vec<Dependency>> {
+        parse_dependency_groups(&self.predepends)
     }
 
     pub fn conflicts_list(&self) -> Vec<Dependency> {
@@ -199,7 +207,7 @@ impl ControlFile {
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
+            .map(parse_provides_name)
             .collect()
     }
 
@@ -211,6 +219,10 @@ impl ControlFile {
         let content = std::fs::read_to_string(path)?;
         Self::parse(&content)
     }
+}
+
+fn parse_provides_name(input: &str) -> String {
+    input.split('(').next().unwrap_or(input).trim().to_string()
 }
 
 fn title_case_field(key: &str) -> String {

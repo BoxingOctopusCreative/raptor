@@ -6,6 +6,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::fs_util::move_file;
 use crate::sources::{default_keyrings_dir, default_sources_list_d, SourceEntry};
 
 /// Reference to a Launchpad PPA (`ppa:owner/repository`).
@@ -205,7 +206,7 @@ pub fn install_keyring(keyrings_dir: &Path, filename: &str, armored_key: &str) -
     // Fall back to armored key if gpg is unavailable.
     let asc_dest = keyrings_dir.join(filename.replace(".gpg", ".asc"));
     if asc_dest != asc_path {
-        fs::rename(&asc_path, &asc_dest)?;
+        move_file(&asc_path, &asc_dest)?;
     }
     Ok(asc_dest)
 }

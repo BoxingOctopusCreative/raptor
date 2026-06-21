@@ -7,11 +7,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 ar.workspace = true
 chrono.workspace = true
 flate2.workspace = true
-hex.workspace = true
 md-5.workspace = true
 regex.workspace = true
 serde.workspace = true

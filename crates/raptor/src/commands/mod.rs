@@ -12,6 +12,6 @@ pub use pkg::{
     cmd_pkg_remove, cmd_pkg_search,
 };
 pub use repo::{
-    cmd_repo_add, cmd_repo_add_ppa, cmd_repo_create, cmd_repo_index, cmd_repo_list,
+    cmd_repo_add, cmd_repo_add_ppa, cmd_repo_apt_convert, cmd_repo_create, cmd_repo_index, cmd_repo_list,
     cmd_repo_priority, cmd_repo_remove_ppa, cmd_repo_sync, cmd_repo_update, RepoCreateKind,
 };

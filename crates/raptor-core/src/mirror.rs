@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::acquire::verify_control_checksums;
 use crate::config::{load_yaml_file, save_yaml_file};
 use crate::error::{Error, Result};
-use crate::remote::fetch_url;
+use crate::fs_util::move_file;
+use crate::remote::{fetch_url, fetch_url_near};
 use crate::release::ReleaseIndex;
 use crate::repository::PackageIndex;
 use crate::verify::{
@@ -176,7 +177,7 @@ pub fn sync_mirror_indexes(root: &Path, config: &MirrorConfig) -> Result<Vec<Pat
                     continue;
                 };
                 let url = format!("{suite_base}{rel_path}");
-                let temp = fetch_url(&url)?;
+                let temp = fetch_url_near(&url, &out_dir)?;
                 verify_payload_checksums(&temp, checksum)?;
                 let dest = if rel_path.ends_with(".gz") {
                     let plain = out_dir.join("Packages");
@@ -185,7 +186,7 @@ pub fn sync_mirror_indexes(root: &Path, config: &MirrorConfig) -> Result<Vec<Pat
                     plain
                 } else {
                     let plain = out_dir.join("Packages");
-                    fs::rename(&temp, &plain)?;
+                    move_file(&temp, &plain)?;
                     plain
                 };
                 synced.push(dest);
@@ -232,20 +233,20 @@ pub fn sync_mirror_pool(root: &Path, config: &MirrorConfig) -> Result<Vec<PathBu
                     continue;
                 }
                 let url = format!("{upstream}/{filename}");
-                let temp = fetch_url(&url)?;
+                let dest = dest_pool.join(filename.trim_start_matches('/'));
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let temp = fetch_url_near(&url, dest.parent().unwrap_or(&dest_pool))?;
                 verify_control_checksums(&temp, &entry.control).map_err(|e| {
                     let _ = fs::remove_file(&temp);
                     e
                 })?;
 
-                let dest = dest_pool.join(filename.trim_start_matches('/'));
-                if let Some(parent) = dest.parent() {
-                    fs::create_dir_all(parent)?;
-                }
                 if dest.exists() {
                     let _ = fs::remove_file(&dest);
                 }
-                fs::rename(&temp, &dest)?;
+                move_file(&temp, &dest)?;
                 synced.push(dest);
                 count += 1;
             }

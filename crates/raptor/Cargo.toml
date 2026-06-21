@@ -11,6 +11,8 @@ name = "raptor"
 path = "src/main.rs"
 
 [dependencies]
+anstream.workspace = true
+anstyle.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 raptor-core = { path = "../raptor-core" }
