@@ -2,21 +2,152 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
+    tags: ["v*"]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
+
+  build-release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            cross: false
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            cross: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation toolchain
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name=="raptor") | .version')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          if [ "$TAG" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag v${TAG} does not match Cargo.toml version ${{ steps.version.outputs.version }}" >&2
+            exit 1
+          fi
+
+      - name: Build host raptor (for .deb packaging)
+        run: cargo build --release --locked
+
+      - name: Build release binary
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package binary archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          BINARY="target/${TARGET}/release/raptor"
+          BASENAME="raptor-${VERSION}-linux-${ARCH}"
+          mkdir -p "dist/${BASENAME}"
+          cp "${BINARY}" "dist/${BASENAME}/raptor"
+          chmod +x "dist/${BASENAME}/raptor"
+          tar -czf "raptor-${VERSION}-linux-${ARCH}.tar.gz" -C dist "${BASENAME}"
+
+      - name: Build .deb package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          RAPTOR_BIN="target/${TARGET}/release/raptor" \
+          RAPTOR_CLI="target/release/raptor" \
+          VERSION="${VERSION}" \
+          ARCH="${ARCH}" \
+          ./scripts/build-raptor-deb.sh
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            raptor-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }}.tar.gz
+            packaging/target/raptor_${{ steps.version.outputs.version }}_${{ matrix.arch }}.deb
+
+  release:
+    needs: build-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name=="raptor") | .version')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create source archives
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git archive --format=tar.gz --prefix="raptor-${VERSION}/" \
+            -o "raptor-${VERSION}.tar.gz" HEAD
+          git archive --format=zip --prefix="raptor-${VERSION}/" \
+            -o "raptor-${VERSION}.zip" HEAD
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Collect release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p release-assets
+          mv "raptor-${VERSION}.tar.gz" "raptor-${VERSION}.zip" release-assets/
+          find dist -type f -exec mv {} release-assets/ \;
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: raptor v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: release-assets/*
