@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::acquire::{ensure_deb, AcquireContext};
-use crate::deb::{apply_deferred_executables, extract_deb_to, read_deb};
+use crate::deb::{apply_deferred_executables, extract_deb_to, read_deb_control};
 use crate::error::Result;
 use crate::repository::PackageIndex;
 use crate::resolver::{ActionKind, InstallPlan};
@@ -34,10 +34,10 @@ impl InstallContext {
                         archives_dir: self.archives_dir.clone(),
                     };
                     let deb_path = ensure_deb(entry, &acquire_ctx)?;
-                    let deb = read_deb(&deb_path)?;
+                    let control = read_deb_control(&deb_path)?;
                     let extract = extract_deb_to(&self.install_root, &deb_path)?;
                     deferred.extend(extract.deferred_executables);
-                    self.state.install(&deb.control);
+                    self.state.install(&control);
                 }
                 ActionKind::Remove => {
                     self.state.remove(&action.package);

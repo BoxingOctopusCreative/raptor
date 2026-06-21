@@ -63,6 +63,13 @@ pub fn read_deb(path: &Path) -> Result<DebArchive> {
     })
 }
 
+/// Read only the Debian control metadata from a `.deb` without loading data members.
+pub fn read_deb_control(path: &Path) -> Result<ControlFile> {
+    let control_bytes = read_ar_member(path, |name| name.starts_with("control.tar"))?;
+    let (control, _) = extract_control_tar(&control_bytes)?;
+    Ok(control)
+}
+
 pub fn write_deb(path: &Path, archive: &DebArchive) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -359,8 +366,9 @@ fn list_deb_data_entries(deb_path: &Path) -> Result<Vec<DebDataEntry>> {
 }
 
 fn conffiles_from_deb(deb_path: &Path) -> Result<HashSet<PathBuf>> {
-    let archive = read_deb(deb_path)?;
-    for (name, content) in archive.control_extra {
+    let control_bytes = read_ar_member(deb_path, |name| name.starts_with("control.tar"))?;
+    let (_, control_extra) = extract_control_tar(&control_bytes)?;
+    for (name, content) in control_extra {
         if tar_entry_basename(&name) == "conffiles" {
             return Ok(parse_conffiles(&String::from_utf8_lossy(&content)));
         }
@@ -736,6 +744,10 @@ mod tests {
 
         let archive = read_deb(&deb_path).unwrap();
         assert_eq!(archive.control.package, "hello");
+
+        let control = read_deb_control(&deb_path).unwrap();
+        assert_eq!(control.package, "hello");
+        assert_eq!(control.version, "1.0");
 
         let root = dir.join("rootfs");
         extract_deb_to(&root, &deb_path).unwrap();

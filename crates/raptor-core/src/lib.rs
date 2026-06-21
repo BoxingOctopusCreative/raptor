@@ -31,8 +31,8 @@ pub use acquire::{
 pub use config::{default_config_path, save_yaml_file, RaptorConfig, UnattendedConfig};
 pub use control::ControlFile;
 pub use deb::{
-    apply_deferred_executables, read_deb, write_deb, DebArchive, DeferredExecutable,
-    ExtractDebResult,
+    apply_deferred_executables, read_deb, read_deb_control, write_deb, DebArchive,
+    DeferredExecutable, ExtractDebResult,
 };
 pub use dependency::{Dependency, VersionConstraint};
 pub use error::{Error, Result};

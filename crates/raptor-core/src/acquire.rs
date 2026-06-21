@@ -5,7 +5,7 @@ use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 
 use crate::control::ControlFile;
-use crate::deb::read_deb;
+use crate::deb::read_deb_control;
 use crate::error::{Error, Result};
 use crate::fs_util::move_file;
 use crate::remote::{download_bytes, download_bytes_near};
@@ -69,9 +69,9 @@ pub fn acquire_direct_deb(spec: &str, ctx: &AcquireContext) -> Result<DirectDeb>
         path
     };
 
-    let mut deb = read_deb(&local)?;
-    deb.control = enrich_direct_deb_control(deb.control, spec);
-    let dest = ctx.archives_dir.join(deb.control.full_name());
+        let control = read_deb_control(&local)?;
+        let control = enrich_direct_deb_control(control, spec);
+        let dest = ctx.archives_dir.join(control.full_name());
 
     if local != dest {
         if dest.exists() {

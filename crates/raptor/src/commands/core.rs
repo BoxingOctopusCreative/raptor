@@ -3,7 +3,7 @@ use raptor_core::acquire::{
     local_deb_index_entry, AcquireContext,
 };
 use raptor_core::control::ControlFile;
-use raptor_core::deb::{apply_deferred_executables, extract_deb_to, read_deb, remove_deb_from};
+use raptor_core::deb::{apply_deferred_executables, extract_deb_to, read_deb_control, remove_deb_from};
 use raptor_core::remote::fetch_remote_indexes;
 use raptor_core::repository::{scan_pool_directory, write_packages_index};
 use raptor_core::resolver::{ActionKind, Resolver};
@@ -82,8 +82,8 @@ pub fn cmd_install(packages: Vec<String>, global: &GlobalOpts) -> anyhow::Result
         if let Some(url) = direct.remote_spec {
             term::get(format!("{} [{}]", url, direct.path.display()));
         }
-        let deb = read_deb(&direct.path)?;
-        let control = enrich_direct_deb_control(deb.control, &spec);
+        let control = read_deb_control(&direct.path)?;
+        let control = enrich_direct_deb_control(control, &spec);
         let package = control.package.clone();
         let entry = local_deb_index_entry(direct.path, control);
         ctx.index
@@ -227,10 +227,10 @@ fn execute_plan(
                         deb_path.display()
                     ));
                 }
-                let deb = read_deb(&deb_path)?;
+                let control = read_deb_control(&deb_path)?;
                 let extract = extract_deb_to(&ctx.install_root, &deb_path)?;
                 deferred.extend(extract.deferred_executables);
-                ctx.state.install(&deb.control);
+                ctx.state.install(&control);
                 term::setting_up(&action.package, &action.version);
             }
             ActionKind::Remove => {
