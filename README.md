@@ -29,16 +29,52 @@ Raptor is a Rust implementation of an APT-compatible Linux package manager. It r
 
 ## Quick start
 
+### Install from a release
+
+Tagged releases (`v*`, version must match `Cargo.toml`) are published to [GitHub Releases](https://github.com/BoxingOctopusCreative/raptor/releases) with:
+
+| Asset | Description |
+|-------|-------------|
+| `raptor-{version}.tar.gz` / `.zip` | Source archives |
+| `raptor-{version}-linux-amd64.tar.gz` | amd64 binary |
+| `raptor-{version}-linux-arm64.tar.gz` | arm64 binary |
+| `raptor_{version}_amd64.deb` | amd64 package |
+| `raptor_{version}_arm64.deb` | arm64 package |
+
+```bash
+# .deb (recommended on Ubuntu/Debian)
+sudo dpkg -i raptor_0.5.0_amd64.deb
+
+# or standalone binary
+tar -xzf raptor-0.5.0-linux-amd64.tar.gz
+sudo cp raptor-0.5.0-linux-amd64/raptor /usr/local/bin/
+```
+
+### Build from source
+
 ```bash
 cargo build --release
-```
-
-Install the binary (optional, requires root for system paths):
-
-```bash
-cargo install --path crates/raptor
+cargo install --path crates/raptor   # optional
 sudo cp target/release/raptor /usr/local/bin/
 ```
+
+Build a `.deb` of Raptor itself (uses `raptor pkg build` under the hood):
+
+```bash
+cargo build --release
+./scripts/build-raptor-deb.sh   # -> packaging/target/raptor_{version}_{arch}.deb
+```
+
+### Cut a release
+
+```bash
+# 1. Bump [workspace.package] version in Cargo.toml
+# 2. Commit, then tag (tag must match, e.g. v0.5.0 for version 0.5.0)
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+CI runs tests, cross-compiles amd64/arm64 binaries, builds `.deb` packages, and publishes the GitHub release.
 
 Global flags (apply to any subcommand):
 
@@ -85,6 +121,7 @@ Legacy `RAPTOR_*` environment variables still override YAML when set.
 
 | Variable                | Default                   | Description |
 |-------------------------|---------------------------|-------------|
+| `RAPTOR_CONFIG`         | `/etc/raptor/config.yaml` | path to config.yaml |
 | `RAPTOR_ROOT`           | `/`                       | filesystem root for package extraction |
 | `RAPTOR_STATE`          | `/var/lib/dpkg/status`    | installed package database (dpkg format; YAML/JSON for dev) |
 | `RAPTOR_CACHE`          | `/var/cache/raptor`       | package index cache |
@@ -94,6 +131,9 @@ Legacy `RAPTOR_*` environment variables still override YAML when set.
 | `RAPTOR_SOURCES_LIST_D` | `/etc/apt/sources.list.d` | override sources.list.d directory |
 | `RAPTOR_KEYRINGS_DIR`   | `/etc/apt/keyrings`       | override PPA keyring directory |
 | `RAPTOR_SUITE`          | from `/etc/os-release`    | Ubuntu codename for PPAs (e.g. `jammy`) |
+| `RAPTOR_ARCH`           | host architecture         | target architecture for package indexes |
+| `RAPTOR_ALLOW_INSECURE` | unset                     | set to `1` to allow unsigned remote sources (not recommended) |
+| `RAPTOR_DEBSIG_VERIFY`  | enabled                   | set to `0` to skip optional `debsig-verify` on install |
 
 Use non-root paths for local testing:
 
@@ -121,7 +161,14 @@ raptor -y pkg get hello
 # Dist-upgrade / remove
 raptor -y upgrade
 raptor -y pkg remove hello
+raptor -y pkg remove --purge hello   # remove configuration files too
 raptor pkg list
+
+# Repository pin priorities
+raptor repo priority                  # list repository order
+raptor repo priority --set repo-id --priority 900
+raptor repo priority --reorder repo-a repo-b repo-c
+raptor repo priority hello            # show version policy for a package
 ```
 
 `sources.list` and `sources.list.d/*.list` are read from `/etc/apt/`. Local `file:` repositories and remote `http(s):` sources (including PPAs) are supported.
@@ -264,12 +311,33 @@ raptor --dry-run daemon --once       # report only, no changes
 
 Install as a systemd service using `examples/config/raptor-daemon.service`.
 
+## Development
+
+```bash
+cargo test                    # unit and integration tests
+cargo test -p raptor-core     # library tests only
+bash examples/demo.sh         # local demo fixture (~KB)
+```
+
+End-to-end smoke tests on Ubuntu via [Multipass](https://multipass.run/) (install/remove, PPAs, Docker repo, dogfood `.deb` install):
+
+```bash
+multipass launch -n test-vm --cpus 2 --memory 2G --disk 10G
+multipass mount . test-vm:/home/ubuntu/raptor
+./scripts/vm-smoke.sh all     # or: ./scripts/vm-smoke.sh pkg_get
+```
+
+Recreate the VM baseline snapshot after apt-convert changes: `RAPTOR_RECREATE_SNAPSHOT=1 ./scripts/vm-smoke.sh all`
+
 ## Architecture
 
 ```
 crates/
   raptor-core/    # library: config, resolver, GPG, mirrors, unattended
   raptor/         # unified CLI (pkg, repo, daemon, config)
+scripts/
+  build-raptor-deb.sh   # build raptor_{version}_{arch}.deb
+  vm-smoke.sh           # Multipass E2E smoke tests
 ```
 
 ## Scope and limitations
