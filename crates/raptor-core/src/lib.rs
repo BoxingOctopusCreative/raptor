@@ -24,7 +24,10 @@ pub mod trust;
 pub mod unattended;
 pub mod verify;
 
-pub use acquire::{build_package_url, ensure_deb, AcquireContext};
+pub use acquire::{
+    acquire_direct_deb, build_package_url, ensure_deb, is_deb_spec, local_deb_index_entry,
+    AcquireContext, DirectDeb,
+};
 pub use config::{default_config_path, save_yaml_file, RaptorConfig, UnattendedConfig};
 pub use control::ControlFile;
 pub use deb::{read_deb, write_deb, DebArchive};

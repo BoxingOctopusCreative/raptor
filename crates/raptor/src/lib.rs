@@ -63,7 +63,7 @@ pub struct PkgArgs {
 pub enum PkgCommands {
     /// Install packages
     Get {
-        /// Package names to install
+        /// Package names, or paths/URLs to .deb files
         packages: Vec<String>,
     },
     /// Remove packages

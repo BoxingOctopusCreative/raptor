@@ -1,4 +1,7 @@
-use raptor_core::acquire::{build_package_url, ensure_deb, AcquireContext};
+use raptor_core::acquire::{
+    acquire_direct_deb, build_package_url, ensure_deb, is_deb_spec, local_deb_index_entry,
+    AcquireContext,
+};
 use raptor_core::control::ControlFile;
 use raptor_core::deb::{extract_deb_to, read_deb, remove_deb_from};
 use raptor_core::remote::fetch_remote_indexes;
@@ -66,8 +69,32 @@ pub fn cmd_install(packages: Vec<String>, global: &GlobalOpts) -> anyhow::Result
     }
 
     let mut ctx = Context::load()?;
+    let (deb_specs, repo_packages): (Vec<_>, Vec<_>) =
+        packages.into_iter().partition(|p| is_deb_spec(p));
+
+    let acquire_ctx = AcquireContext {
+        archives_dir: ctx.archives_dir.clone(),
+    };
+    let mut install_names = repo_packages;
+
+    for spec in deb_specs {
+        let direct = acquire_direct_deb(&spec, &acquire_ctx).map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(url) = direct.remote_spec {
+            term::get(format!("{} [{}]", url, direct.path.display()));
+        }
+        let deb = read_deb(&direct.path)?;
+        let package = deb.control.package.clone();
+        let entry = local_deb_index_entry(direct.path, deb.control);
+        ctx.index
+            .packages
+            .entry(package.clone())
+            .or_default()
+            .push(entry);
+        install_names.push(package);
+    }
+
     let resolver = Resolver::new(&ctx.index, &ctx.state, &ctx.arch);
-    let plan = resolver.plan_install(&packages)?;
+    let plan = resolver.plan_install(&install_names)?;
 
     print_plan(&plan.actions);
     if !global.dry_run && confirm(global.yes)? {

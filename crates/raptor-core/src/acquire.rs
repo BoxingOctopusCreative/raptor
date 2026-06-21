@@ -5,6 +5,7 @@ use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 
 use crate::control::ControlFile;
+use crate::deb::read_deb;
 use crate::error::{Error, Result};
 use crate::fs_util::move_file;
 use crate::remote::{download_bytes, download_bytes_near};
@@ -15,6 +16,88 @@ use crate::verify::verify_deb_package_signature;
 #[derive(Debug, Clone)]
 pub struct AcquireContext {
     pub archives_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectDeb {
+    pub path: PathBuf,
+    pub remote_spec: Option<String>,
+}
+
+/// Whether `spec` refers to a local `.deb` path or remote `.deb` URL (not a repository package name).
+pub fn is_deb_spec(spec: &str) -> bool {
+    if spec.starts_with("http://") || spec.starts_with("https://") || spec.starts_with("file://") {
+        return spec.ends_with(".deb");
+    }
+    Path::new(spec)
+        .extension()
+        .is_some_and(|ext| ext == "deb")
+}
+
+/// Copy or download an arbitrary `.deb` into the archives cache.
+pub fn acquire_direct_deb(spec: &str, ctx: &AcquireContext) -> Result<DirectDeb> {
+    if !is_deb_spec(spec) {
+        return Err(Error::PackageAcquire(format!("not a .deb path or URL: {spec}")));
+    }
+
+    fs::create_dir_all(&ctx.archives_dir)?;
+
+    let remote_spec = if spec.starts_with("http://") || spec.starts_with("https://") {
+        Some(spec.to_string())
+    } else {
+        None
+    };
+
+    let local = if let Some(url) = &remote_spec {
+        download_bytes_near(url, &ctx.archives_dir).map_err(|e| {
+            Error::PackageAcquire(format!("failed to download {url}: {e}"))
+        })?
+    } else {
+        let path = if let Some(local) = spec.strip_prefix("file://") {
+            PathBuf::from(local)
+        } else {
+            PathBuf::from(spec)
+        };
+        if !path.is_file() {
+            return Err(Error::PackageAcquire(format!(
+                "cannot access archive '{spec}': No such file or directory"
+            )));
+        }
+        path
+    };
+
+    let deb = read_deb(&local)?;
+    let dest = ctx.archives_dir.join(deb.control.full_name());
+
+    if local != dest {
+        if dest.exists() {
+            fs::remove_file(&dest)?;
+        }
+        if remote_spec.is_some() {
+            move_file(&local, &dest)?;
+        } else {
+            fs::copy(&local, &dest)?;
+        }
+    }
+
+    Ok(DirectDeb {
+        path: dest,
+        remote_spec,
+    })
+}
+
+/// Build an index entry for a locally acquired `.deb` (wins over repository versions).
+pub fn local_deb_index_entry(deb_path: PathBuf, control: ControlFile) -> PackageIndexEntry {
+    PackageIndexEntry {
+        control,
+        file_path: deb_path,
+        source_uri: None,
+        packages_index_path: None,
+        signed_by: None,
+        suite: None,
+        component: None,
+        repo_priority: i32::MAX,
+    }
 }
 
 /// Ensure a `.deb` is available locally, downloading from the configured repository if needed.
@@ -156,6 +239,16 @@ pub fn verify_control_checksums(path: &Path, control: &ControlFile) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_deb_specs() {
+        assert!(is_deb_spec("./hello_1.0_all.deb"));
+        assert!(is_deb_spec("/tmp/pkg_2.0_amd64.deb"));
+        assert!(is_deb_spec("file:///tmp/pkg_2.0_amd64.deb"));
+        assert!(is_deb_spec("https://example.com/pool/pkg_1.0_amd64.deb"));
+        assert!(!is_deb_spec("hello-raptor"));
+        assert!(!is_deb_spec("https://example.com/ubuntu/dists/stable/Release"));
+    }
 
     #[test]
     fn builds_pool_download_url() {

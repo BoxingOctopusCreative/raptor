@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use raptor_core::acquire::{build_package_url, ensure_deb, verify_control_checksums, AcquireContext};
+use raptor_core::acquire::{
+    acquire_direct_deb, build_package_url, ensure_deb, is_deb_spec, verify_control_checksums,
+    AcquireContext,
+};
 use raptor_core::control::ControlFile;
 use raptor_core::repository::PackageIndexEntry;
 
@@ -45,6 +48,45 @@ fn verify_control_checksums_matches_index_metadata() {
     };
     verify_control_checksums(&file, &control).unwrap();
     let _ = std::fs::remove_file(file);
+}
+
+#[test]
+fn acquire_direct_deb_from_local_file() {
+    let demo_deb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/demo/repo/pool/h/hello-raptor_0.1.0_all.deb");
+    if !demo_deb.exists() {
+        return;
+    }
+
+    let archives = std::env::temp_dir().join(format!("raptor-direct-{}", std::process::id()));
+    let acquire_ctx = AcquireContext {
+        archives_dir: archives.clone(),
+    };
+    let direct = acquire_direct_deb(&demo_deb.display().to_string(), &acquire_ctx).unwrap();
+    assert_eq!(direct.path, archives.join("hello-raptor_0.1.0_all.deb"));
+    assert!(direct.path.is_file());
+    assert!(direct.remote_spec.is_none());
+    assert!(is_deb_spec(&demo_deb.display().to_string()));
+    let _ = std::fs::remove_dir_all(archives);
+}
+
+#[test]
+fn acquire_direct_deb_from_file_url() {
+    let demo_deb = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/demo/repo/pool/h/hello-raptor_0.1.0_all.deb");
+    if !demo_deb.exists() {
+        return;
+    }
+
+    let archives = std::env::temp_dir().join(format!("raptor-direct-file-{}", std::process::id()));
+    let acquire_ctx = AcquireContext {
+        archives_dir: archives.clone(),
+    };
+    let spec = format!("file://{}", demo_deb.display());
+    let direct = acquire_direct_deb(&spec, &acquire_ctx).unwrap();
+    assert_eq!(direct.path, archives.join("hello-raptor_0.1.0_all.deb"));
+    assert!(direct.remote_spec.is_none());
+    let _ = std::fs::remove_dir_all(archives);
 }
 
 #[test]

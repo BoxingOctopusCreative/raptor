@@ -50,14 +50,23 @@ impl<'a> Resolver<'a> {
             if to_install.contains(&name) {
                 continue;
             }
-            if self.state.is_installed(&name) {
-                continue;
-            }
 
             let entry = self
                 .index
                 .get_best(&name, &self.arch)
                 .ok_or_else(|| Error::PackageNotFound(name.clone()))?;
+
+            if self.state.is_installed(&name) {
+                if let Some(installed) = self.state.get(&name) {
+                    if deb_version_compare(&entry.control.version, &installed.version)
+                        != std::cmp::Ordering::Greater
+                    {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
 
             self.check_conflicts(&entry.control)?;
             to_install.insert(name.clone());
