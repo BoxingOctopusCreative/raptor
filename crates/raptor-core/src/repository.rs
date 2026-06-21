@@ -9,6 +9,7 @@ use flate2::Compression;
 use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 
+use crate::acquire::DIRECT_DEB_PRIORITY;
 use crate::control::ControlFile;
 use crate::error::Result;
 
@@ -141,7 +142,9 @@ impl PackageIndex {
             entries
                 .iter()
                 .filter(|e| {
-                    e.control.architecture == arch
+                    e.repo_priority == DIRECT_DEB_PRIORITY
+                        || e.control.architecture.is_empty()
+                        || e.control.architecture == arch
                         || e.control.architecture == "all"
                         || arch == "all"
                 })

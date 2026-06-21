@@ -18,6 +18,9 @@ pub struct AcquireContext {
     pub archives_dir: PathBuf,
 }
 
+/// Repository pin priority for `.deb` files passed directly to `raptor pkg get`.
+pub const DIRECT_DEB_PRIORITY: i32 = i32::MAX;
+
 #[derive(Debug, Clone)]
 pub struct DirectDeb {
     pub path: PathBuf,
@@ -66,7 +69,8 @@ pub fn acquire_direct_deb(spec: &str, ctx: &AcquireContext) -> Result<DirectDeb>
         path
     };
 
-    let deb = read_deb(&local)?;
+    let mut deb = read_deb(&local)?;
+    deb.control = enrich_direct_deb_control(deb.control, spec);
     let dest = ctx.archives_dir.join(deb.control.full_name());
 
     if local != dest {
@@ -86,6 +90,39 @@ pub fn acquire_direct_deb(spec: &str, ctx: &AcquireContext) -> Result<DirectDeb>
     })
 }
 
+/// Fill in missing control fields for a directly requested `.deb`.
+pub fn enrich_direct_deb_control(mut control: ControlFile, spec: &str) -> ControlFile {
+    if control.architecture.is_empty() {
+        if let Some(arch) = infer_arch_from_deb_spec(spec) {
+            control.architecture = arch;
+        }
+    }
+    control
+}
+
+fn infer_arch_from_deb_spec(spec: &str) -> Option<String> {
+    let name = spec.rsplit('/').next()?.strip_suffix(".deb")?;
+    let arch = name.rsplit('_').next()?;
+    if is_known_deb_arch(arch) {
+        Some(arch.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_known_deb_arch(arch: &str) -> bool {
+    matches!(
+        arch,
+        "all" | "amd64"
+            | "arm64"
+            | "armhf"
+            | "i386"
+            | "ppc64el"
+            | "riscv64"
+            | "s390x"
+    )
+}
+
 /// Build an index entry for a locally acquired `.deb` (wins over repository versions).
 pub fn local_deb_index_entry(deb_path: PathBuf, control: ControlFile) -> PackageIndexEntry {
     PackageIndexEntry {
@@ -96,7 +133,7 @@ pub fn local_deb_index_entry(deb_path: PathBuf, control: ControlFile) -> Package
         signed_by: None,
         suite: None,
         component: None,
-        repo_priority: i32::MAX,
+        repo_priority: DIRECT_DEB_PRIORITY,
     }
 }
 
@@ -246,8 +283,22 @@ mod tests {
         assert!(is_deb_spec("/tmp/pkg_2.0_amd64.deb"));
         assert!(is_deb_spec("file:///tmp/pkg_2.0_amd64.deb"));
         assert!(is_deb_spec("https://example.com/pool/pkg_1.0_amd64.deb"));
+        assert!(is_deb_spec("raptor_0.6.0_amd64.deb"));
         assert!(!is_deb_spec("hello-raptor"));
         assert!(!is_deb_spec("https://example.com/ubuntu/dists/stable/Release"));
+    }
+
+    #[test]
+    fn infers_architecture_from_deb_filename() {
+        let control = enrich_direct_deb_control(
+            ControlFile {
+                package: "raptor".into(),
+                version: "0.6.0".into(),
+                ..Default::default()
+            },
+            "raptor_0.6.0_amd64.deb",
+        );
+        assert_eq!(control.architecture, "amd64");
     }
 
     #[test]

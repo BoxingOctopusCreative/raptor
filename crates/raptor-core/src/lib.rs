@@ -25,8 +25,8 @@ pub mod unattended;
 pub mod verify;
 
 pub use acquire::{
-    acquire_direct_deb, build_package_url, ensure_deb, is_deb_spec, local_deb_index_entry,
-    AcquireContext, DirectDeb,
+    acquire_direct_deb, build_package_url, enrich_direct_deb_control, ensure_deb, is_deb_spec,
+    local_deb_index_entry, AcquireContext, DirectDeb, DIRECT_DEB_PRIORITY,
 };
 pub use config::{default_config_path, save_yaml_file, RaptorConfig, UnattendedConfig};
 pub use control::ControlFile;

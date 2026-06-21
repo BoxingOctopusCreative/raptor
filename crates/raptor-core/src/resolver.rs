@@ -304,9 +304,11 @@ impl<'a> Resolver<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashSet, VecDeque};
     use std::path::PathBuf;
 
     use super::*;
+    use crate::acquire::{local_deb_index_entry, DIRECT_DEB_PRIORITY};
     use crate::control::ControlFile;
     use crate::dependency::parse_dependency_groups;
     use crate::repository::{PackageIndex, PackageIndexEntry};
@@ -401,5 +403,35 @@ mod tests {
         resolver
             .resolve_dependency_group(&group[0], &mut queue, &chosen)
             .expect("virtual dep satisfied by queued debconf");
+    }
+
+    #[test]
+    fn installs_direct_deb_when_runtime_arch_differs_from_compile_time() {
+        let index = index_with(vec![local_deb_index_entry(
+            PathBuf::from("/var/cache/apt/archives/raptor_0.6.0_amd64.deb"),
+            ControlFile {
+                package: "raptor".into(),
+                version: "0.6.0".into(),
+                architecture: "amd64".into(),
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            index
+                .packages
+                .get("raptor")
+                .and_then(|entries| entries.first())
+                .map(|entry| entry.repo_priority),
+            Some(DIRECT_DEB_PRIORITY)
+        );
+
+        let state = State::default();
+        let resolver = Resolver::new(&index, &state, "arm64");
+        let plan = resolver
+            .plan_install(&["raptor".to_string()])
+            .expect("direct deb should bypass arch filter");
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].package, "raptor");
+        assert_eq!(plan.actions[0].version, "0.6.0");
     }
 }

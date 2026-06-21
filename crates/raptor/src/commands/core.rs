@@ -1,6 +1,6 @@
 use raptor_core::acquire::{
-    acquire_direct_deb, build_package_url, ensure_deb, is_deb_spec, local_deb_index_entry,
-    AcquireContext,
+    acquire_direct_deb, build_package_url, enrich_direct_deb_control, ensure_deb, is_deb_spec,
+    local_deb_index_entry, AcquireContext,
 };
 use raptor_core::control::ControlFile;
 use raptor_core::deb::{extract_deb_to, read_deb, remove_deb_from};
@@ -83,8 +83,9 @@ pub fn cmd_install(packages: Vec<String>, global: &GlobalOpts) -> anyhow::Result
             term::get(format!("{} [{}]", url, direct.path.display()));
         }
         let deb = read_deb(&direct.path)?;
-        let package = deb.control.package.clone();
-        let entry = local_deb_index_entry(direct.path, deb.control);
+        let control = enrich_direct_deb_control(deb.control, &spec);
+        let package = control.package.clone();
+        let entry = local_deb_index_entry(direct.path, control);
         ctx.index
             .packages
             .entry(package.clone())

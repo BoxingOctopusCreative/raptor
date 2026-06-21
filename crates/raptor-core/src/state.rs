@@ -227,7 +227,25 @@ pub fn default_archives_dir() -> PathBuf {
 }
 
 pub fn detect_architecture() -> String {
-    std::env::var("RAPTOR_ARCH").unwrap_or_else(|_| std::env::consts::ARCH.to_string())
+    if let Ok(v) = std::env::var("RAPTOR_ARCH") {
+        return v;
+    }
+    if let Some(arch) = read_dpkg_native_arch() {
+        return arch;
+    }
+    std::env::consts::ARCH.to_string()
+}
+
+fn read_dpkg_native_arch() -> Option<String> {
+    let arch = std::fs::read_to_string("/var/lib/dpkg/arch")
+        .ok()?
+        .trim()
+        .to_string();
+    if arch.is_empty() {
+        None
+    } else {
+        Some(arch)
+    }
 }
 
 /// Map Rust architecture names to Debian binary architecture names.
@@ -296,5 +314,12 @@ mod tests {
         assert!(state.is_purgeable("hello"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deb_architecture_maps_rust_targets() {
+        assert_eq!(deb_architecture("x86_64"), "amd64");
+        assert_eq!(deb_architecture("aarch64"), "arm64");
+        assert_eq!(deb_architecture("amd64"), "amd64");
     }
 }
