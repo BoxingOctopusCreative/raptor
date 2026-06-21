@@ -112,6 +112,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Read version from Cargo.toml
@@ -145,10 +147,33 @@ jobs:
           find dist -type f -exec mv {} release-assets/ \;
           ls -la release-assets/
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)"
+
+          {
+            echo "## Changes"
+            echo
+            if [ -z "$PREVIOUS_TAG" ]; then
+              echo "_Initial release._"
+              echo
+              git log --pretty=format:'- %s (%h)' --no-merges
+            else
+              echo "_Commits since ${PREVIOUS_TAG}._"
+              echo
+              git log "${PREVIOUS_TAG}..${CURRENT_TAG}" --pretty=format:'- %s (%h)' --no-merges
+            fi
+          } > release-notes.md
+
+          echo "previous_tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+          cat release-notes.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: raptor v${{ steps.version.outputs.version }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: release-assets/*
